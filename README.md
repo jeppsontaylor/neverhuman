@@ -1,18 +1,31 @@
-# NeverHuman
+<p align="center">
+  <img src="https://raw.githubusercontent.com/jeppsontaylor/neverhuman/main/gary/static/img/banner.png" alt="NeverHuman Banner" width="100%"/>
+</p>
 
+# <p align="center"><img src="https://readme-typing-svg.demolab.com?font=Inter&weight=800&size=48&duration=3000&pause=1000&color=00C6FF&center=true&vCenter=true&width=435&lines=NeverHuman" alt="NeverHuman" /></p>
+
+<p align="center">
+  <a href="https://github.com/jeppsontaylor/neverhuman/actions/workflows/ci.yml">
+    <img src="https://github.com/jeppsontaylor/neverhuman/actions/workflows/ci.yml/badge.svg" alt="Tests" />
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License" />
+  </a>
+  <a href="https://support.apple.com/en-us/HT211814">
+    <img src="https://img.shields.io/badge/requires-Apple%20Silicon-black?logo=apple" alt="Requires Apple Silicon" />
+  </a>
+</p>
+
+<p align="center">
+  <img src="gary/static/img/gary_man.png" alt="GARY" width="100%" />
+</p>
+
+> [!NOTE]
 > ***"We refuse to accept that AI must remain soulless."***
 
 **GARY** — an open-source cognitive companion that runs entirely on your Mac. No cloud. No subscriptions. No data leaving your machine. Just you and a mind that grows more human the longer you know it.
 
 *The only AI that grows with you.*
-
-[![Tests](https://github.com/neverhuman/neverhuman/actions/workflows/ci.yml/badge.svg)](https://github.com/neverhuman/neverhuman/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Requires Apple Silicon](https://img.shields.io/badge/requires-Apple%20Silicon-black?logo=apple)](https://support.apple.com/en-us/HT211814)
-
-<p align="center">
-  <img src="gary/static/img/gary_man.png" alt="GARY" width="420" />
-</p>
 
 ---
 
