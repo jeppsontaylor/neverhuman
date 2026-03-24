@@ -133,11 +133,26 @@ The name inspiration comes from J.A.R.V.I.S. — Tony Stark's AI. The goal was a
 
 ## Contributing
 
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+We welcome contributions! See [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md) for guidelines.
 
 - 🐛 [Report a bug](.github/ISSUE_TEMPLATE/bug_report.md)
 - 💡 [Request a feature](.github/ISSUE_TEMPLATE/feature_request.md)
 - 📖 [Read the architecture](gary/ARCHITECTURE.md)
+
+---
+
+## Documentation
+
+| Document | Location |
+|---|---|
+| **Architecture** | [`docs/project/ARCHITECTURE.md`](docs/project/ARCHITECTURE.md) |
+| **Vision & Manifesto** | [`docs/project/VISION.md`](docs/project/VISION.md) |
+| **Roadmap** | [`docs/project/ROADMAP.md`](docs/project/ROADMAP.md) |
+| **Changelog** | [`docs/project/CHANGELOG.md`](docs/project/CHANGELOG.md) |
+| **Privacy & Telemetry** | [`docs/project/PRIVACY.md`](docs/project/PRIVACY.md) |
+| **Security** | [`.github/SECURITY.md`](.github/SECURITY.md) |
+| **Code of Conduct** | [`.github/CODE_OF_CONDUCT.md`](.github/CODE_OF_CONDUCT.md) |
+| **Support** | [`.github/SUPPORT.md`](.github/SUPPORT.md) |
 
 ---
 
