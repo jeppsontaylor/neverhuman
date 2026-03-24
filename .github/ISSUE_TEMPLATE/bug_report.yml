@@ -1,62 +1,54 @@
-name: Bug Report
-description: File a bug report to help us improve GARY
-title: "[Bug]: "
+name: 🐛 Bug Report
+description: Create a report to help us improve GARY
+title: "[BUG] "
 labels: ["bug"]
+assignees: []
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to fill out this bug report! Please check existing issues.
+        Thanks for taking the time to report a bug in NeverHuman / GARY!
   - type: input
-    id: os
+    id: version
     attributes:
-      label: "macOS Version"
-      placeholder: "e.g., 14.3"
+      label: Version / Commit Hash
+      description: What version of GARY are you running? (Output of `git rev-parse HEAD`)
     validations:
       required: true
   - type: dropdown
-    id: chip
+    id: hardware
     attributes:
-      label: "Apple Silicon Chip"
+      label: Apple Silicon Hardware
+      description: What hardware are you running on?
       options:
-        - "M1"
-        - "M2"
-        - "M3"
-        - "M4"
-    validations:
-      required: true
-  - type: input
-    id: python
-    attributes:
-      label: "Python Version"
-      description: "Output of `python3 --version`"
-      placeholder: "Python 3.11.x"
+        - M1 (8GB / 16GB)
+        - M2 (16GB / 24GB)
+        - M3 Pro / Max
+        - M4 Pro / Max
+        - Other Apple Silicon
     validations:
       required: true
   - type: textarea
     id: description
     attributes:
-      label: "What happened?"
-      description: "Describe the bug."
-    validations:
-      required: true
-  - type: textarea
-    id: expected
-    attributes:
-      label: "Expected behavior"
-      description: "What did you expect to happen?"
+      label: Describe the bug
+      description: A clear and concise description of what the bug is.
     validations:
       required: true
   - type: textarea
     id: reproduction
     attributes:
-      label: "Reproduction Steps"
-      description: "How can we reproduce the error?"
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Run `install.sh`
+        2. Speak '...'
+        3. See error
     validations:
       required: true
   - type: textarea
     id: logs
     attributes:
-      label: "Logs"
-      description: "pytest output or Server log (gary/logs/ or terminal output)"
-      render: shell
+      label: Terminal Logs
+      description: Paste any relevant terminal logs (from `server.py`).
+      render: markdown

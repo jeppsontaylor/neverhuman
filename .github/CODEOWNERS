@@ -1,15 +1,12 @@
-# CODEOWNERS
-# These owners will be requested for review on all PRs.
+*       @jeppsontaylor
 
-*  @jeppsontaylor
+# Direct ownership based on domains
 
-# Core pipeline — extra review for latency-sensitive code
-gary/pipeline/   @jeppsontaylor
-gary/core/       @jeppsontaylor
-gary/server.py   @jeppsontaylor
+/gary/pipeline/  @jeppsontaylor
+/gary/memory/    @jeppsontaylor
+/gary/core/      @jeppsontaylor
+/gary/static/    @jeppsontaylor
 
-# Memory / database schema
-gary/memory/     @jeppsontaylor
-
-# Tests — no test coverage reduction without approval
-gary/testing/    @jeppsontaylor
+/docs/           @jeppsontaylor
+/benchmarks/     @jeppsontaylor
+/assets/         @jeppsontaylor

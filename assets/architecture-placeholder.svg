@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400">
+  <rect width="100%" height="100%" fill="#0d1117"/>
+  <text x="400" y="50" fill="#c9d1d9" font-family="sans-serif" font-size="24" text-anchor="middle" font-weight="bold">NeverHuman / GARY System Architecture</text>
+
+  <!-- Nodes -->
+  <rect x="100" y="100" width="150" height="60" rx="8" fill="#21262d" stroke="#30363d" stroke-width="2"/>
+  <text x="175" y="135" fill="#58a6ff" font-family="sans-serif" font-size="16" text-anchor="middle" font-weight="bold">UI Layer</text>
+
+  <rect x="325" y="100" width="150" height="60" rx="8" fill="#21262d" stroke="#30363d" stroke-width="2"/>
+  <text x="400" y="135" fill="#3fb950" font-family="sans-serif" font-size="16" text-anchor="middle" font-weight="bold">Reflex Core</text>
+
+  <rect x="325" y="220" width="150" height="60" rx="8" fill="#21262d" stroke="#30363d" stroke-width="2"/>
+  <text x="400" y="255" fill="#d2a8ff" font-family="sans-serif" font-size="16" text-anchor="middle" font-weight="bold">Memory Spine</text>
+
+  <rect x="550" y="100" width="150" height="60" rx="8" fill="#21262d" stroke="#30363d" stroke-width="2"/>
+  <text x="625" y="135" fill="#ff7b72" font-family="sans-serif" font-size="16" text-anchor="middle" font-weight="bold">Inference Runtime</text>
+
+  <rect x="325" y="300" width="150" height="60" rx="8" fill="#21262d" stroke="#30363d" stroke-width="2"/>
+  <text x="400" y="335" fill="#a5d6ff" font-family="sans-serif" font-size="16" text-anchor="middle" font-weight="bold">Mind Daemon</text>
+
+  <!-- Edges -->
+  <!-- UI to Core -->
+  <path d="M 250 130 L 315 130" stroke="#8b949e" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- Core to Inference -->
+  <path d="M 475 130 L 540 130" stroke="#8b949e" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- Core to Memory -->
+  <path d="M 400 160 L 400 210" stroke="#8b949e" stroke-width="2" marker-end="url(#arrow)"/>
+  <!-- Core to Daemon -->
+  <path d="M 400 280 L 400 295" stroke="#8b949e" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Definitions -->
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8b949e" />
+    </marker>
+  </defs>
+</svg>

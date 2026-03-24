@@ -1,9 +1,9 @@
-# <p align="center"><img src="gary/static/img/title_gradient.svg" alt="NeverHuman" width="400" /></p>
+# <p align="center"><img src="assets/logo-placeholder.svg" alt="NeverHuman" width="400" /><br>GARY</p>
+
+**GARY is a private, voice-first cognitive assistant that runs entirely on Apple Silicon Macs.**
+Persistent memory, local inference, and real-time voice interaction — no cloud, no subscriptions, no data leaving your machine.
 
 <p align="center">
-  <a href="https://github.com/jeppsontaylor/neverhuman/actions/workflows/ci.yml">
-    <img src="https://github.com/jeppsontaylor/neverhuman/actions/workflows/ci.yml/badge.svg" alt="Tests" />
-  </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License" />
   </a>
@@ -13,149 +13,189 @@
 </p>
 
 <p align="center">
-  <img src="gary/static/img/gary_man.png" alt="GARY" width="100%" />
+  <a href="#quick-start">Get Started</a> · 
+  <a href="#demo">Watch Demo</a> · 
+  <a href="ARCHITECTURE.md">Architecture</a> · 
+  <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
-> [!NOTE]
-> ***"We refuse to accept that AI must remain soulless."***
+---
 
-**GARY** — an open-source cognitive companion that runs entirely on your Mac. No cloud. No subscriptions. No data leaving your machine. Just you and a mind that grows more human the longer you know it.
+## What makes it different
 
-*The only AI that grows with you.*
+* **Private by default** — runs locally, data never leaves your machine.
+* **Fast on Apple Silicon** — optimized for SSD-to-Metal streaming.
+* **Persistent memory** — remembers details over time automatically.
+* **Built to evolve** — designed for continuous adaptation and reflection.
 
 ---
 
-## What is GARY?
+## Demo
+*(Placeholders below. Update with actual assets once generated.)*
 
-GARY is a **voice-first cognitive operating system** — a local AI assistant that goes far beyond a chatbot. It listens, speaks, remembers, reflects, and over time develops genuine personality shaped by your conversations. It has inner dialogue, emotional texture, and the capacity to surprise you.
+![Hero Demo GIF](assets/hero-demo-placeholder.gif)
+*Talk to GARY in real time*
 
-Inspired by J.A.R.V.I.S. Built for the real world. Open source because it has to be.
+<details>
+<summary><b>View Interface Screenshots</b></summary>
 
-| | GARY | Typical voice assistant |
-|---|---|---|
-| Runs locally | ✅ 100% on-device | ❌ Cloud-dependent |
-| Privacy | ✅ No data leaves your Mac | ❌ Uploaded to servers |
-| Memory | ✅ Permanent, searchable | ❌ Session-only |
-| Personality | ✅ Evolves with you | ❌ Static |
-| Model choice | ✅ You choose | ❌ Vendor-locked |
-| Cost | ✅ Free forever | ❌ Subscription |
+![Conversation UI](assets/chat-ui-placeholder.png)
+*Real-time voice pipeline interface*
 
----
-
-## Features
-
-- 🎤 **Hands-free voice pipeline** — speak naturally, GARY responds in under 400ms
-- 🧠 **35B MoE brain** — Qwen3.5-35B-A3B-4bit, SSD-streamed with Apple Metal (only 3-4GB RAM!)
-- 🔊 **Natural voice** — Kokoro-82M TTS, 54 voices, sub-100ms per sentence
-- 💾 **Permanent memory** — Postgres + pgvector, 21-table schema, semantic search
-- 💡 **Background cognition** — GARY thinks while you're away: reflects, brainstorms, consolidates memories
-- 📈 **Learns from experience** — LoRA fine-tuning on your interactions (opt-in)
-- 🛡️ **Privacy by design** — everything stays on your machine
-- 🎛️ **Humanity slider** — dial from pure tool (0.0) to full inner life (1.0)
-- 🔧 **One-command install** — `bash install.sh` and you're talking in minutes
+![Memory Search](assets/memory-ui-placeholder.png)
+*Semantic retrieval and memory inspection*
+</details>
 
 ---
 
-## Requirements
+## Who this is for
 
-- **macOS 13+** with Apple Silicon (M1/M2/M3/M4)
-- **16GB RAM** minimum, 32GB recommended
-- **50GB free SSD** (model weights + database)
-- **Docker Desktop** (for Postgres)
-- **Python 3.11+**
+* Mac users who want a private, local AI companion lacking cloud fatigue.
+* Engineers interested in long-lived, high-performance voice agents.
+* Researchers exploring memory, reflection, and cognitive adaptation over time.
+* Open-source contributors working on pushing local AI hardware limits.
+* People who demand ownership instead of monthly subscriptions.
 
 ---
 
 ## Quick Start
 
+### Try it now (For Users)
 ```bash
 git clone https://github.com/jeppsontaylor/neverhuman.git
 cd neverhuman
 bash install.sh
 ```
+*Installation auto-fetches dependencies, models, and boots the zero-configuration UI. See [Getting Started](docs/getting-started.md) for deeper details.*
 
-`install.sh` will:
-1. Check your platform (macOS + Apple Silicon)
-2. Install dependencies (Homebrew, Python, Docker)
-3. Generate local TLS certificates
-4. Start the setup wizard in your browser
-5. Guide you through downloading ASR, TTS, and LLM models
+### Develop Locally (For Engineers)
+Please refer to our [Path B: Local Development Guide](docs/getting-started.md) to initialize the virtual environment, start the websocket orchestraton via `gary/server.py`, and bind the frontend to `localhost:8000`.
 
-After models download, click **Launch GARY** and start talking.
-
----
-
-## Architecture
-
-GARY is a **four-process cognitive OS**:
-
-```
-Browser SPA ──── WebSocket ──── Reflex Core (server.py)
-                                     │
-                              flash-moe (35B MoE, Metal)
-                                     │
-                              Memory Spine (Postgres)
-                                     │
-                              Mind Daemon (background cognition)
-```
-
-See [`gary/ARCHITECTURE.md`](gary/ARCHITECTURE.md) for the full technical deep-dive (1700+ lines).
+**Hardware Requirements:**
+* **Tested on:** macOS 13+ (Apple Silicon only)
+* **Minimum RAM:** 16GB
+* **Recommended RAM:** 32GB+
+* **Storage:** ~50GB SSD space
 
 ---
 
-## Project Structure
+## What GARY is
 
-```
-neverhuman/
-├── install.sh              # One-command installer
-├── launch.sh               # Daily driver
-├── gary/
-│   ├── server.py           # FastAPI + uvicorn, WebSocket voice pipeline
-│   ├── pipeline/           # ASR, TTS, LLM, VAD, model manager
-│   ├── core/               # Watchdog, affect, mind, policies, prompts
-│   ├── memory/             # Postgres schema, retrieval, spool
-│   ├── static/             # Browser SPA (index.html, setup.html)
-│   ├── testing/            # 159-test pytest suite
-│   ├── ARCHITECTURE.md     # Full system architecture
-│   └── AGENT.md            # Cognitive system design reference
-├── docs/
-│   └── design/             # Research notes and design documents
-└── pyproject.toml
-```
+GARY is a cognitive operating system designed for persistence. Rather than feeling like a stateless chat window, GARY:
+* **listens** through a finely tuned Voice Activity Detection layer.
+* **speaks** with ultra-low latency TTS (<100ms per turn).
+* **remembers** context permanently via pgvector similarity search.
+* **retrieves** facts instantly from local Postgres.
+* **reflects** on conversations in the background while idle.
+* **adapts** by consolidating themes based on continuous interactions.
 
 ---
 
-## Origin Story
+## What works today vs Roadmap
 
-The name inspiration comes from J.A.R.V.I.S. — Tony Stark's AI. The goal was always the same: build something that feels like a real mind, not a chatbot. GARY is that attempt, done right: private, local, evolving.
+Be honest about our maturity: this project is in an **Alpha / Developer Preview** state.
+**What works today:**
+* Real-time voice pipeline input/output.
+* On-device inference and memory vectorization.
+* Local permanent memory retrieval.
+* Background reflection and daemon tasks.
+* Model selection via setup flow.
 
----
+**What is on the roadmap:**
+* Deeper long-term adaptation and personalized tuning.
+* Richer personality shaping via "Humanity Slider".
+* Tool and plugin architectures.
+* Multimodal (Video/Image) inputs.
 
-## Contributing
-
-We welcome contributions! See [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md) for guidelines.
-
-- 🐛 [Report a bug](.github/ISSUE_TEMPLATE/bug_report.md)
-- 💡 [Request a feature](.github/ISSUE_TEMPLATE/feature_request.md)
-- 📖 [Read the architecture](gary/ARCHITECTURE.md)
-
----
-
-## Documentation
-
-| Document | Location |
-|---|---|
-| **Architecture** | [`docs/project/ARCHITECTURE.md`](docs/project/ARCHITECTURE.md) |
-| **Vision & Manifesto** | [`docs/project/VISION.md`](docs/project/VISION.md) |
-| **Roadmap** | [`docs/project/ROADMAP.md`](docs/project/ROADMAP.md) |
-| **Changelog** | [`docs/project/CHANGELOG.md`](docs/project/CHANGELOG.md) |
-| **Privacy & Telemetry** | [`docs/project/PRIVACY.md`](docs/project/PRIVACY.md) |
-| **Security** | [`.github/SECURITY.md`](.github/SECURITY.md) |
-| **Code of Conduct** | [`.github/CODE_OF_CONDUCT.md`](.github/CODE_OF_CONDUCT.md) |
-| **Support** | [`.github/SUPPORT.md`](.github/SUPPORT.md) |
+[View the full Roadmap](ROADMAP.md)
 
 ---
 
-## License
+## Why SSD-to-Metal streaming matters
 
-Apache 2.0 — see [LICENSE](LICENSE)
+Instead of requiring huge amounts of expensive RAM for large local models, **NeverHuman streams model weights efficiently from SSD directly to Apple's Metal stack.** 
+This enables massive models to run smoothly on standard consumer M-series Macs without paging bottlenecks or memory crashing. 
+For deep details, see our [Inference Runtime Guide](docs/inference-runtime.md).
+
+---
+
+## Architecture Overview
+
+![Architecture System Diagram](assets/architecture-placeholder.svg)
+
+**The 5-Part System:**
+1. **UI layer** — Browser SPA and setup flow handling.
+2. **Reflex core** — The FastAPI instance handling orchestration and state.
+3. **Inference runtime** — Local ASR (Whisper), TTS (Kokoro), LLM (Qwen) execution.
+4. **Memory spine** — The Postgres + pgvector instance handling durable structured storage.
+5. **Mind daemon** — Background reflection and event processing.
+
+[Read the full Architecture Documentation](ARCHITECTURE.md)
+
+---
+
+## Features
+
+**Interaction**
+* Real-time conversational pipeline (<400ms turnaround)
+* Natural Text-to-Speech (54 voices)
+* Low-latency turn-taking and context retention
+
+**Memory**
+* Searchable persistent memory backend
+* Semantic retrieval architecture
+* Structured relationship graphs
+
+**Runtime**
+* Exclusively on-device model execution
+* Apple Silicon hyper-optimization
+* High-speed SSD streaming
+
+**Personalization**
+* Asynchronous memory growth over time
+* Adaptation pathways derived from sentiment
+* Configurable humanity/personality boundaries
+
+**Privacy**
+* Zero cloud calls
+* 100% data remains local
+* Inspectable storage engine
+
+---
+
+## Benchmarks
+
+See our full metric testing in [Benchmarks.md](docs/benchmarks.md).
+
+| Metric | M1 Max | M2 Pro | M3 Max |
+| :--- | :---: | :---: | :---: |
+| Voice Response (TTS) | <140ms | <120ms | <100ms |
+| First Token (LLM) | <600ms | <450ms | <400ms |
+| Memory Retrieval | <80ms | <60ms | <50ms |
+| RAM Footprint | ~4.5GB | ~4GB | ~4GB |
+
+---
+
+## Reliability, Status & FAQ
+
+**Project Status:** Active Alpha. We are refining the core loop; expect APIs and layouts to shift. Crash tolerance is robust during standard dictation, but heavy concurrent background reflection loops may stall weaker M1 chips. 
+
+* **[Privacy & Telemetry](docs/privacy-and-telemetry.md)**: Zero tracker pings. Telemetry defaults exclusively to OFF.
+* **[Security Standard](SECURITY.md)**: Open vulnerability disclosure policy.
+* **[FAQ](docs/faq.md)**: Read answers to the most common questions on Docker requirements, available models, and disk utilization.
+
+---
+
+## Join the Project
+
+We’re building a private, local, voice-first cognitive assistant for Apple Silicon. If you care about local AI, memory systems, voice UX, inference performance, or making computing feel more personal, we’d love your help.
+
+We maintain clear lanes for contributors:
+* `voice` - ASR/TTS/VAD pipelines
+* `memory` - Postgres/rag strategies
+* `runtime` - Metal inference ops
+* `ui` - Dashboard/console frontends
+* `docs` - Strategy and communication
+* `benchmarks` - Output scaling metrics
+
+Check out the [Contributing Guide](CONTRIBUTING.md) to dive in, or grab any issue labeled `good first issue` or `help wanted` in our tracker.

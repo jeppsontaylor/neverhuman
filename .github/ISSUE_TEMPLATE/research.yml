@@ -1,0 +1,32 @@
+name: 🔬 Research Proposition
+description: Propose or discuss research directions for GARY's cognitive architecture
+title: "[RESEARCH] "
+labels: ["research"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to open a research discussion for NeverHuman / GARY!
+        Research issues focus on long-term memory structures, LLM optimizations, voice pipelines, and cognitive reflection loops.
+  - type: input
+    id: component
+    attributes:
+      label: Target Subsystem
+      description: Which area of GARY does this research target? (e.g. Memory Spine, VAD pipeline, Background Reflection)
+    validations:
+      required: true
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: Hypothesis or Proposal
+      description: What is your core idea or proposal?
+    validations:
+      required: true
+  - type: textarea
+    id: methodology
+    attributes:
+      label: Suggested Methodology
+      description: How might we implement or test this within the existing Apple Silicon runtime constraints?
+    validations:
+      required: false

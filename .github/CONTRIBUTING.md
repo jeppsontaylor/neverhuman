@@ -1,81 +1,33 @@
-# Contributing to NeverHuman
+# Contributing to NeverHuman (GARY)
 
-Thank you for your interest in contributing to GARY! This project is built to last, and we hold contributions to a high standard to keep it that way.
+First off, thank you for considering contributing to GARY! This is a community-driven project dedicated to building a private, local, voice-first cognitive assistant for Apple Silicon. We’d love your help.
 
----
+## Contribution Lanes
 
-## Quick start
+Contributors are more likely to succeed if they find the right lane. We have explicitly defined the following areas of focus:
 
-```bash
-git clone https://github.com/jeppsontaylor/neverhuman.git
-cd neverhuman
-python3 -m venv gary/.venv && source gary/.venv/bin/activate
-pip install -e ".[dev]"
-cd gary && pytest testing/ -q
-```
+* **🎙️ Voice pipeline** (`label: voice`) — VAD tuning, ASR models (Whisper), TTS improvements (Kokoro), audio latency reduction.
+* **🧠 Local inference & runtime** (`label: performance`, `label: runtime`) — Metal/SSD streaming optimizations, Qwen model loading, context handling.
+* **💾 Memory and retrieval** (`label: memory`) — Postgres `pgvector` optimizations, graph relationships, vector spacing.
+* **🖥️ UI / Frontend** (`label: frontend`) — The setup UI, console web interface, and socket stability.
+* **📖 Documentation** (`label: docs`) — Improving tutorials, adding examples, writing clearer copy.
+* **📊 Benchmarks / Testing** (`label: infra`) — Automating performance comparisons, hardware testing matrices.
 
-All 159 tests must pass before submitting a PR.
+## Finding an Issue
 
----
+* **New to the project?** Look for issues labeled `good first issue` or `help wanted`. These will usually be isolated UI tweaks, documentation improvements, or simple edge cases.
+* **Researchers?** Look for the `research` label. We frequently post open-ended architectural questions there.
 
-## Naming rules (strictly enforced)
+## Issue Templates
 
-> **Never use `jarvis` in any code, filename, variable, log string, or comment.**
-> Use `gary` (the AI's name) or `neverhuman` (the project name).
->
-> `JARVIS` appears only in `README.md` as origin-story context. Nowhere else.
+Please use the provided YAML issue templates when opening an issue:
+* Bug Report
+* Feature Request
+* Research Proposition
 
----
+## Development Setup
 
-## Branch strategy
-
-- `main` — stable, always passing CI
-- `dev` — integration branch for feature PRs
-- Feature branches: `feat/<short-description>`
-- Bug fixes: `fix/<short-description>`
-
----
-
-## PR requirements
-
-- [ ] All tests pass (`pytest gary/testing/ -q`)
-- [ ] No new `jarvis` strings (CI checks this)
-- [ ] Code follows existing style (ruff clean)
-- [ ] New behavior includes tests
-- [ ] Description explains *why*, not just *what*
-
----
-
-## What we especially want
-
-- 🔊 **Voice quality improvements** — VAD tuning, TTS voice additions
-- 🧠 **Mind daemon isolation** — moving `mind_loop` to `apps/mindd/`
-- 💾 **Memory improvements** — retrieval quality, schema evolution
-- 🔌 **Connectors** — calendar, browser, file system
-- 🧪 **Test coverage** — especially integration tests
-- 📖 **Documentation** — architecture clarity, tutorials
-
-## What we won't accept
-
-- Cloud sync, telemetry, or analytics (without explicit community vote)
-- Breaking changes to the voice pipeline latency budget
-- New dependencies without justification
-- Code that introduces `JARVIS` naming
-
----
-
-## Commit messages
-
-Use [Conventional Commits](https://www.conventionalcommits.org/):
-
-```
-feat(pipeline): add Silero VAD v5 as upgrade path
-fix(server): reset is_speaking on WebSocket disconnect
-docs(arch): update §26 turn classifier table
-```
-
----
-
-## Code of Conduct
-
-See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+1. **Clone the repository**
+2. **Initialize Python**: `python3 -m venv .venv && source .venv/bin/activate`
+3. **Ensure Docker is running** (for `pgvector` memory backend).
+4. **Read `ARCHITECTURE.md`** to understand the high-level OS data flow before digging into `gary/server.py`.
