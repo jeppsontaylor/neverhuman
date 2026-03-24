@@ -36,11 +36,14 @@ GARY_LLM_HOST = os.getenv("GARY_LLM_HOST", "localhost")
 GARY_LLM_PORT = int(os.getenv("GARY_LLM_PORT", "8088"))
 LLM_URL  = f"http://{GARY_LLM_HOST}:{GARY_LLM_PORT}"
 
-# Portable default: ~/.neverhuman/flash-moe/infer (set by install.sh)
+# Default: <repo-root>/flash-moe/infer  (vendored, compiled in-place)
+# The repo root is two directories up from this file (gary/core/ → gary/ → repo-root)
+_REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+
 # Override with GARY_INFER_BIN env var
 INFER_BIN = os.getenv(
     "GARY_INFER_BIN",
-    os.path.expanduser("~/.neverhuman/flash-moe/infer"),
+    os.path.join(_REPO_ROOT, "flash-moe", "infer"),
 )
 
 
@@ -208,16 +211,19 @@ class LLMWatchdog:
         log_path = os.path.normpath(log_path)
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
-        with open(log_path, "a") as log_file:
-            self._process = subprocess.Popen(
-                cmd,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,  # no stdin — prevents REPL exit
-                preexec_fn=os.setsid,      # new process group
-                cwd=os.path.dirname(INFER_BIN),
-            )
-        log.info(f"[watchdog] infer started PID={self._process.pid}")
+        try:
+            with open(log_path, "a") as log_file:
+                self._process = subprocess.Popen(
+                    cmd,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,  # no stdin — prevents REPL exit
+                    preexec_fn=os.setsid,      # new process group
+                    cwd=os.path.dirname(INFER_BIN),  # data files (out_35b/, vocab.bin, tokenizer.bin) live next to the binary
+                )
+            log.info(f"[watchdog] infer started PID={self._process.pid}")
+        except OSError as e:
+            log.warning(f"[watchdog] failed to launch infer ({e}) — is the binary compiled?")
 
     async def _run(self):
         """Main watchdog loop."""

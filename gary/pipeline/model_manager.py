@@ -19,6 +19,10 @@ import json
 import logging
 import os
 import time
+import sys
+import shutil
+import asyncio
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncIterator, Optional
@@ -188,8 +192,185 @@ def get_catalog() -> dict:
 # ── Download Manager ──────────────────────────────────────────────────────────
 
 # Active downloads keyed by model_id
-_active_downloads: dict[str, asyncio.Task] = {}
+@dataclass
+class DownloadTask:
+    process: asyncio.subprocess.Process
+    last_event: dict = field(default_factory=dict)
+    listeners: list[asyncio.Queue] = field(default_factory=list)
+    done: bool = False
 
+_active_downloads: dict[str, DownloadTask] = {}
+_dashboard_task = None
+_last_drawn_lines = 0
+
+def _gradient_color(pct: float) -> str:
+    """Returns an ANSI truecolor escape sequence scaling from Pink -> Yellow -> Green -> Cyan."""
+    stops = [
+        (0.0, (236, 72, 153)),   # Deep Pink
+        (33.0, (234, 179, 8)),   # Brilliant Yellow
+        (66.0, (34, 197, 94)),   # Emerald Green
+        (100.0, (6, 182, 212))   # Cyan
+    ]
+    pct = max(0.0, min(100.0, float(pct)))
+    
+    for i in range(len(stops) - 1):
+        if stops[i][0] <= pct <= stops[i+1][0]:
+            start_p, start_c = stops[i]
+            end_p, end_c = stops[i+1]
+            break
+    else:
+        start_p, start_c = stops[-2]
+        end_p, end_c = stops[-1]
+        
+    ratio = (pct - start_p) / (end_p - start_p) if end_p != start_p else 0
+    r = int(start_c[0] + (end_c[0] - start_c[0]) * ratio)
+    g = int(start_c[1] + (end_c[1] - start_c[1]) * ratio)
+    b = int(start_c[2] + (end_c[2] - start_c[2]) * ratio)
+    return f"\033[38;2;{r};{g};{b}m"
+
+async def _terminal_dashboard_loop():
+    """Prints a beautiful real-time 10fps progress dashboard of all active downloads to the terminal."""
+    global _last_drawn_lines
+    C_RESET = "\033[0m"
+    C_DIM = "\033[90m"
+    C_BOLD = "\033[1m"
+    C_TITLE = "\033[38;2;139;92;246m" # Neon Purple
+    
+    icons = {"asr": "🎤", "tts": "🔊", "llm": "🧠"}
+    
+    try:
+        while True:
+            await asyncio.sleep(0.1) # 10 FPS
+            
+            if not _active_downloads:
+                if _last_drawn_lines > 0:
+                    sys.stdout.write(f"\033[{_last_drawn_lines}A\033[J")
+                    sys.stdout.flush()
+                    _last_drawn_lines = 0
+                continue
+            
+            lines = []
+            lines.append(f" {C_TITLE}{C_BOLD}╭─ NeverHuman Model Sync ──────────────────────────────────────────╮{C_RESET}")
+            lines.append(f" {C_TITLE}│{C_RESET}                                                                  {C_TITLE}│{C_RESET}")
+            
+            for mid, task in list(_active_downloads.items()):
+                spec = get_model_spec(mid)
+                ev = task.last_event
+                
+                cat = next((c for c, specs in MODEL_CATALOG.items() if any(s.id == mid for s in specs)), "sys")
+                icon = icons.get(cat, "📦")
+                name = spec.display_name if spec else mid
+                repo = spec.hf_repo if spec else "unknown"
+                
+                lines.append(f" {C_TITLE}│{C_RESET}  {icon} {C_BOLD}{name}{C_RESET} {C_DIM}({repo}){C_RESET}")
+                
+                if ev.get("type") == "progress":
+                    pct = ev.get("pct", 0)
+                    speed = ev.get("speed_mbps", 0.0)
+                    color = _gradient_color(pct)
+                    
+                    bar_len = 35
+                    filled = int((pct / 100) * bar_len)
+                    empty = bar_len - filled
+                    bar = "█" * filled + "░" * empty
+                    
+                    # Pad to ensure correct box framing
+                    stat_str = f"{pct}% • {speed} MB/s"
+                    pad = max(0, 60 - (bar_len + len(stat_str) + 7))
+                    
+                    lines.append(f" {C_TITLE}│{C_RESET}  {color}[{bar}] {stat_str}{C_RESET}{' ' * pad}{C_TITLE}│{C_RESET}")
+                elif ev.get("type") == "checking":
+                    lines.append(f" {C_TITLE}│{C_RESET}  {C_DIM}Starting connection...{' ' * 42}{C_TITLE}│{C_RESET}")
+                elif ev.get("type") == "done":
+                    color = _gradient_color(100)
+                    lines.append(f" {C_TITLE}│{C_RESET}  {color}[{'█'*35}] 100% • Complete!{' ' * 11}{C_RESET}{C_TITLE}│{C_RESET}")
+                elif ev.get("type") == "error":
+                    lines.append(f" {C_TITLE}│{C_RESET}  \033[31m[ERROR] {ev.get('message', 'Failed')}{C_RESET}")
+                else:
+                    lines.append(f" {C_TITLE}│{C_RESET}  {C_DIM}Waiting...{' ' * 54}{C_TITLE}│{C_RESET}")
+                
+                lines.append(f" {C_TITLE}│{C_RESET}                                                                  {C_TITLE}│{C_RESET}")
+                
+            lines[-1] = f" {C_TITLE}╰──────────────────────────────────────────────────────────────────╯{C_RESET}"
+            
+            out = ""
+            if _last_drawn_lines > 0:
+                out += f"\033[{_last_drawn_lines}A\033[J" # Move up and clear
+            
+            out += "\n".join(lines) + "\n"
+            sys.stdout.write(out)
+            sys.stdout.flush()
+            
+            _last_drawn_lines = len(lines)
+            
+    except asyncio.CancelledError:
+        if _last_drawn_lines > 0:
+            sys.stdout.write(f"\033[{_last_drawn_lines}A\033[J")
+            sys.stdout.flush()
+
+async def _worker_monitor(model_id: str, task: DownloadTask):
+    """Reads stdout from the background worker and broadcasts isolated JSON events to all UI listeners."""
+    try:
+        while True:
+            line = await task.process.stdout.readline()
+            if not line:
+                break
+            try:
+                event = json.loads(line.decode().strip())
+                task.last_event = event
+                # notify all connected browser tabs
+                for q in task.listeners:
+                    q.put_nowait(event)
+            except json.JSONDecodeError:
+                continue
+    finally:
+        await task.process.wait()
+        if not task.last_event.get("type") in ("done", "error"):
+            # process died unexpectedly (or was killed by user)
+            event = {"type": "error", "message": f"Worker exited with code {task.process.returncode}"}
+            task.last_event = event
+            for q in task.listeners:
+                q.put_nowait(event)
+        
+        task.done = True
+        
+        # Keep in memory for 10s so late-reconnects see the final "done/error" state
+        await asyncio.sleep(10)
+        _active_downloads.pop(model_id, None)
+
+async def start_download_bg(model_id: str, hf_token: Optional[str] = None) -> DownloadTask:
+    """Spawns the isolated download worker and starts monitoring it."""
+    spec = get_model_spec(model_id)
+    if not spec:
+        raise ValueError(f"Unknown model ID: {model_id}")
+    
+    # 1. Disk space verification
+    free_gb = shutil.disk_usage(Path.home()).free / 1e9
+    if free_gb < spec.size_gb:
+        raise RuntimeError(f"Insufficient disk space. Need {spec.size_gb}GB, have {round(free_gb, 1)}GB.")
+        
+    worker_script = Path(__file__).parent / "download_worker.py"
+    
+    args = [sys.executable, str(worker_script), "--repo", spec.hf_repo, "--size-gb", str(spec.size_gb)]
+    if hf_token:
+        args.extend(["--token", hf_token])
+        
+    process = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL
+    )
+    
+    task = DownloadTask(process=process)
+    _active_downloads[model_id] = task
+    asyncio.create_task(_worker_monitor(model_id, task))
+    
+    # Lazily start terminal dashboard on first download
+    global _dashboard_task
+    if _dashboard_task is None:
+        _dashboard_task = asyncio.create_task(_terminal_dashboard_loop())
+        
+    return task
 
 def get_model_spec(model_id: str) -> Optional[ModelSpec]:
     """Look up a ModelSpec by its ID."""
@@ -199,152 +380,67 @@ def get_model_spec(model_id: str) -> Optional[ModelSpec]:
                 return spec
     return None
 
-
 async def download_model_sse(
     model_id: str,
     hf_token: Optional[str] = None,
 ) -> AsyncIterator[str]:
     """
-    Async generator yielding SSE-formatted progress events for a model download.
-
-    Events:
-      data: {"type": "progress", "pct": 45, "speed_mbps": 12.4, "eta_s": 42, "bytes": 1234}
-      data: {"type": "checking", "message": "Verifying..."}
-      data: {"type": "done", "path": "/path/to/snapshot"}
-      data: {"type": "error", "message": "..."}
+    Subscribes the UI to an active background download. 
+    If none exists, safely spawns it. Resilient to browser refreshes.
     """
     spec = get_model_spec(model_id)
     if not spec:
         yield _sse({"type": "error", "message": f"Unknown model: {model_id}"})
         return
 
-    # Check if already downloaded
+    # Check if natively already downloaded
     existing = detect_model(spec)
     if existing["ready"]:
         yield _sse({"type": "done", "path": existing["path"], "cached": True})
         return
 
+    # Attach to existing global task or start new
+    if model_id in _active_downloads:
+        task = _active_downloads[model_id]
+    else:
+        try:
+            task = await start_download_bg(model_id, hf_token)
+        except Exception as e:
+            yield _sse({"type": "error", "message": str(e)})
+            return
+
+    # Send last known state immediately so reconnecting UI updates instantly
+    if task.last_event:
+        yield _sse(task.last_event)
+        if task.last_event.get("type") in ("done", "error"):
+            return
+
+    # Subscribe to live updates
+    q = asyncio.Queue()
+    task.listeners.append(q)
     try:
-        from huggingface_hub import snapshot_download
-        from huggingface_hub import HfApi
-        import threading
-
-        # Use a thread + queue to bridge sync huggingface_hub callbacks with async
-        queue: asyncio.Queue = asyncio.Queue()
-        loop = asyncio.get_event_loop()
-
-        total_bytes = int(spec.size_gb * 1e9)
-        start_time = time.monotonic()
-        last_bytes = [0]
-        last_time = [start_time]
-
-        def progress_callback(downloaded: int, total: int):
-            now = time.monotonic()
-            elapsed = now - start_time
-            chunk = downloaded - last_bytes[0]
-            dt = now - last_time[0]
-            speed_bps = chunk / dt if dt > 0.5 else 0
-            speed_mbps = round(speed_bps / 1e6, 2)
-            pct = round(downloaded / total * 100) if total > 0 else 0
-            remaining = total - downloaded
-            eta_s = int(remaining / speed_bps) if speed_bps > 0 else None
-            last_bytes[0] = downloaded
-            last_time[0] = now
-            event = {
-                "type": "progress",
-                "pct": pct,
-                "speed_mbps": speed_mbps,
-                "eta_s": eta_s,
-                "bytes_done": downloaded,
-                "bytes_total": total,
-            }
-            asyncio.run_coroutine_threadsafe(queue.put(event), loop)
-
-        def _download():
+        while not task.done:
             try:
-                # Custom tqdm class that bridges huggingface_hub progress → async SSE queue
-                from tqdm import tqdm as _tqdm_base
-
-                class _SSETqdm(_tqdm_base):
-                    """Tqdm subclass that pushes progress to an asyncio queue for SSE streaming."""
-                    _cumulative_bytes = 0
-                    _cumulative_total = 0
-
-                    def __init__(self, *args, **kwargs):
-                        kwargs['disable'] = False
-                        super().__init__(*args, **kwargs)
-                        if self.total:
-                            _SSETqdm._cumulative_total += self.total
-
-                    def update(self, n=1):
-                        super().update(n)
-                        _SSETqdm._cumulative_bytes += n
-                        now = time.monotonic()
-                        dt = now - last_time[0]
-                        if dt < 0.3 and _SSETqdm._cumulative_bytes < _SSETqdm._cumulative_total:
-                            return  # throttle updates
-                        chunk = _SSETqdm._cumulative_bytes - last_bytes[0]
-                        speed_bps = chunk / dt if dt > 0.5 else 0
-                        speed_mbps = round(speed_bps / 1e6, 2)
-                        total_est = max(_SSETqdm._cumulative_total, int(spec.size_gb * 1e9))
-                        pct = min(99, round(_SSETqdm._cumulative_bytes / total_est * 100)) if total_est > 0 else 0
-                        remaining = total_est - _SSETqdm._cumulative_bytes
-                        eta_s = int(remaining / speed_bps) if speed_bps > 0 else None
-                        last_bytes[0] = _SSETqdm._cumulative_bytes
-                        last_time[0] = now
-                        event = {
-                            "type": "progress",
-                            "pct": pct,
-                            "speed_mbps": speed_mbps,
-                            "eta_s": eta_s,
-                            "bytes_done": _SSETqdm._cumulative_bytes,
-                            "bytes_total": total_est,
-                        }
-                        asyncio.run_coroutine_threadsafe(queue.put(event), loop)
-
-                _SSETqdm._cumulative_bytes = 0
-                _SSETqdm._cumulative_total = 0
-
-                path = snapshot_download(
-                    repo_id=spec.hf_repo,
-                    token=hf_token or os.getenv("HF_TOKEN"),
-                    tqdm_class=_SSETqdm,
-                )
-                asyncio.run_coroutine_threadsafe(
-                    queue.put({"type": "done", "path": path}), loop
-                )
-            except Exception as exc:
-                asyncio.run_coroutine_threadsafe(
-                    queue.put({"type": "error", "message": str(exc)}), loop
-                )
-
-        yield _sse({"type": "checking", "message": f"Starting download: {spec.display_name}"})
-
-        # Start download in background thread
-        thread = threading.Thread(target=_download, daemon=True)
-        thread.start()
-
-        # Yield events as they arrive
-        while True:
-            try:
-                event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                event = await asyncio.wait_for(q.get(), timeout=15.0)
+                yield _sse(event)
+                if event.get("type") in ("done", "error"):
+                    break
             except asyncio.TimeoutError:
                 yield _sse({"type": "heartbeat"})
-                continue
+    except asyncio.CancelledError:
+        # Browser disconnected gracefully! The background process keeps running safely.
+        pass
+    finally:
+        if q in task.listeners:
+            task.listeners.remove(q)
 
-            yield _sse(event)
-
-            if event["type"] in ("done", "error"):
-                break
-
-    except ImportError:
-        yield _sse({
-            "type": "error",
-            "message": "huggingface_hub not installed. Run: pip install huggingface_hub",
-        })
-    except Exception as exc:
-        log.exception(f"Download error for {model_id}: {exc}")
-        yield _sse({"type": "error", "message": str(exc)})
+async def cancel_download(model_id: str):
+    """Forcefully reap an ongoing download and prevent zombies."""
+    if model_id in _active_downloads:
+        task = _active_downloads[model_id]
+        if task.process.returncode is None:
+            task.process.kill()
+        _active_downloads.pop(model_id, None)
 
 
 def _sse(payload: dict) -> str:

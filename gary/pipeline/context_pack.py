@@ -25,10 +25,9 @@ COMPILER_VERSION = 2
 # ── Feature flags ────────────────────────────────────────────────────────────
 
 def context_pack_enabled() -> bool:
-    """Default off; set GARY_CONTEXT_PACK=1 to prepend compiled pack."""
-    return os.getenv("GARY_CONTEXT_PACK", "").strip().lower() in (
-        "1", "true", "yes", "on",
-    )
+    """Default ON; set GARY_CONTEXT_PACK=0 to disable."""
+    val = os.getenv("GARY_CONTEXT_PACK", "1").strip().lower()
+    return val not in ("0", "false", "no", "off")
 
 
 def pack_history_limit() -> int:

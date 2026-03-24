@@ -47,6 +47,7 @@ async def generate_pulse(
     affect_summary: str,
     open_loops: list[str],
     recent_conversation: list[str],
+    stale_streak: int = 0,
 ) -> dict:
     """Generate a single mind pulse via the sidecar LLM.
 
@@ -63,10 +64,12 @@ async def generate_pulse(
         open_loops=open_loops,
         recent_conversation=recent_conversation,
         json_mode=True,
+        stale_streak=stale_streak,
     )
 
     max_tokens = PHASE_BUDGETS.get(phase, 200)
-    temperature = PHASE_TEMPERATURES.get(phase, 0.6)
+    base_temperature = PHASE_TEMPERATURES.get(phase, 0.6)
+    temperature = min(1.5, base_temperature + (stale_streak * 0.15))
 
     payload = {
         "model": "default",
@@ -74,6 +77,8 @@ async def generate_pulse(
         "max_tokens": max_tokens,
         "temperature": temperature,
         "stream": False,
+        "frequency_penalty": 0.8,
+        "presence_penalty": 0.6,
     }
 
     try:

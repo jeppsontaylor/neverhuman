@@ -110,28 +110,25 @@ fi
 
 # ── 8. flash-moe inference engine ────────────────────────────────────────────
 banner "flash-moe inference engine"
-INFER_BIN="${GARY_INFER_BIN:-$NH_HOME/flash-moe/infer}"
-mkdir -p "$(dirname "$INFER_BIN")"
-if [[ -x "$INFER_BIN" ]]; then
-    ok "engine already at $INFER_BIN"
+FLASH_MOE_DIR="$REPO_DIR/flash-moe"
+INFER_BIN="${GARY_INFER_BIN:-$FLASH_MOE_DIR/infer}"
+if [ -s "$INFER_BIN" ] && [ -x "$INFER_BIN" ]; then
+    ok "engine already compiled at $INFER_BIN"
 else
-    warn "flash-moe binary not found at $INFER_BIN"
-    echo ""
-    echo -e "  ${BOLD}To build flash-moe:${RST}"
-    echo "    git clone https://github.com/neverhuman/mac_flash_moe /tmp/mac_flash_moe"
-    echo "    cd /tmp/mac_flash_moe && make"
-    echo "    cp build/infer $INFER_BIN"
-    echo ""
-    echo "  flash-moe is the SSD-to-Metal GPU inference engine for GARY."
-    echo "  Without it, the local model won't start — but you can still download weights via the web setup."
-    echo ""
-    warn "Continuing without flash-moe — you'll need to build it before GARY can run local inference."
+    warn "Compiling flash-moe from vendored source (~60s)…"
+    if (cd "$FLASH_MOE_DIR" && make infer 2>&1); then
+        chmod +x "$INFER_BIN"
+        ok "flash-moe compiled → $INFER_BIN"
+    else
+        warn "Compilation failed — will retry automatically on first start.sh run"
+        warn "Ensure Xcode CLI tools are installed: xcode-select --install"
+    fi
 fi
 
-# ── 9. Create ~/.neverhuman ────────────────────────────────────────────────────
+# ── 9. Create runtime directories ─────────────────────────────────────────────
 banner "Runtime directories"
-mkdir -p "$NH_HOME/flash-moe" "$NH_HOME/data"
-ok "~/.neverhuman ready"
+mkdir -p "$NH_HOME/data"
+ok "~/.neverhuman/data ready"
 
 # ── 10. .env file ─────────────────────────────────────────────────────────────
 banner "Environment config"

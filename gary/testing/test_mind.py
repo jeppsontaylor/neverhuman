@@ -123,7 +123,7 @@ class TestPromptBuilding:
         content = msgs[0]["content"]
         assert "recursion" in content
         assert "trees" in content
-        assert "BUILD ON THESE" in content
+        assert "DO NOT repeat" in content
 
     def test_includes_avoid_topics(self):
         msgs = build_mind_prompt(
@@ -136,7 +136,7 @@ class TestPromptBuilding:
         )
         content = msgs[0]["content"]
         assert "recursion" in content
-        assert "DO NOT revisit" in content
+        assert "FORBIDDEN" in content
 
     def test_includes_affect_summary(self):
         msgs = build_mind_prompt(
@@ -335,18 +335,15 @@ class TestThoughtDeduplicator:
         dedup = ThoughtDeduplicator()
         assert not dedup.is_paused()
         dedup.record_outcome(True)
-        dedup.record_outcome(True)
-        dedup.record_outcome(True)  # 3rd stale → triggers pause
+        dedup.record_outcome(True)  # 2nd stale → triggers pause
         assert dedup.is_paused()
 
     def test_non_stale_resets_streak(self):
         dedup = ThoughtDeduplicator()
         dedup.record_outcome(True)
-        dedup.record_outcome(True)
         dedup.record_outcome(False)  # resets
         dedup.record_outcome(True)
-        dedup.record_outcome(True)
-        assert not dedup.is_paused()  # only 2 in a row, not 3
+        assert not dedup.is_paused()  # only 1 in a row, not 2
 
     def test_get_recent_topics(self):
         dedup = ThoughtDeduplicator()

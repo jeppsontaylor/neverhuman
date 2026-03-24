@@ -46,6 +46,8 @@ from pipeline.vad import VADAccumulator, RollingBuffer, SpeechDetector, BARGEIN_
 from pipeline.filler_audio import get_filler_wav_bytes
 from pipeline.turn_classifier import TurnMode, classify_turn
 from pipeline.turn_supervisor import TurnSupervisor, FloorState, FloorOwner, Engagement, Event
+from pipeline.tts_normalizer import normalize_for_tts
+from pipeline.output_sanitizer import sanitize_token, sanitize_sentence
 
 # ── mind daemon imports ──────────────────────────────────────────────────────
 from core.mind import (
@@ -71,8 +73,36 @@ _MIN_FREE_RAM_WARN_GB = 3.0  # Warn in health endpoint if free RAM drops below t
 logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("gary.server")
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ASR and TTS now load lazily on first use — no blocking loads at startup.
+    # This reduces startup RAM from ~1.6 GB to ~100 MB.
+    log.info("GARY starting (ASR + TTS will lazy-load on first voice request)…")
+
+    # Start idle-unload watchdog
+    asyncio.create_task(_idle_unload_task())
+
+    # Start self-healing LLM watchdog — will auto-start infer if not running
+    watchdog.on_state_change(lambda _: broadcast_health())
+    await watchdog.start()
+    log.info("LLM watchdog started ✓ (auto-restart enabled)")
+
+    llm_ok = await check_connectivity()
+    if llm_ok:
+        log.info("LLM server reachable ✓")
+    else:
+        log.info(
+            "LLM not yet reachable — watchdog will auto-start it"
+        )
+
+    log.info("GARY ready ✓")
+    yield
+    await watchdog.stop()
+
 # ── App ────────────────────────────────────────────────────────────────────────
-app = FastAPI(title="GARY")
+app = FastAPI(title="GARY", lifespan=lifespan)
 
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -80,11 +110,14 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 @app.get("/")
 async def index():
-    """Serve index.html, or redirect to /setup if models are not ready."""
-    from pipeline.model_manager import all_defaults_ready
-    if not all_defaults_ready():
-        from fastapi.responses import RedirectResponse
-        return RedirectResponse("/setup")
+    """Always redirect to /setup for the initial connection and model check sequence."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse("/setup")
+
+
+@app.get("/chat")
+async def chat():
+    """Serve the main GARY chat UI after models are ready."""
     return FileResponse(str(STATIC_DIR / "index.html"))
 
 
@@ -110,7 +143,7 @@ async def api_setup_models():
     return JSONResponse(get_catalog())
 
 
-@app.post("/api/setup/download/{model_id}")
+@app.get("/api/setup/download/{model_id:path}")
 async def api_setup_download(model_id: str, hf_token: str | None = None):
     """Start downloading a model; returns an SSE stream with progress events."""
     from fastapi.responses import StreamingResponse
@@ -120,6 +153,14 @@ async def api_setup_download(model_id: str, hf_token: str | None = None):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.delete("/api/setup/download/{model_id:path}")
+async def api_setup_cancel(model_id: str):
+    """Forcefully cancel an active background shell download."""
+    from pipeline.model_manager import cancel_download
+    await cancel_download(model_id)
+    return {"status": "cancelled", "model_id": model_id}
 
 
 @app.get("/health")
@@ -206,29 +247,7 @@ async def broadcast_health():
     for ws in dead:
         active_websockets.discard(ws)
 
-@app.on_event("startup")
-async def startup():
-    # ASR and TTS now load lazily on first use — no blocking loads at startup.
-    # This reduces startup RAM from ~1.6 GB to ~100 MB.
-    log.info("GARY starting (ASR + TTS will lazy-load on first voice request)…")
 
-    # Start idle-unload watchdog
-    asyncio.create_task(_idle_unload_task())
-
-    # Start self-healing LLM watchdog — will auto-start infer if not running
-    watchdog.on_state_change(lambda _: broadcast_health())
-    await watchdog.start()
-    log.info("LLM watchdog started ✓ (auto-restart enabled)")
-
-    llm_ok = await check_connectivity()
-    if llm_ok:
-        log.info("LLM server reachable ✓")
-    else:
-        log.info(
-            "LLM not yet reachable — watchdog will auto-start it"
-        )
-
-    log.info("GARY ready ✓")
 
 
 # ── REST: voice list ──────────────────────────────────────────────────────────
@@ -535,6 +554,8 @@ async def ws_gary(websocket: WebSocket):
     IS_SPEAKING_TIMEOUT = 30.0       # v3.2: hard cap — 30s max speaking time
     turn_epoch: int = 0   # tracks the current audio epoch for v3.1 frontend barrier
     current_turn_mode: TurnMode = TurnMode.LAYERED  # v4: turn classification
+    mind_task: asyncio.Task | None = None  # initialized here; created at mind_loop() start
+    mind_audio_enabled: bool = False  # v6: mind speaks aloud only when toggled on
 
     # ── v5: Attention Kernel (TurnSupervisor) ─────────────────────────────────
     utterance_queue_placeholder: asyncio.Queue = asyncio.Queue()  # will be set below
@@ -550,9 +571,14 @@ async def ws_gary(websocket: WebSocket):
             payload.update(extra)
         await _safe_send_json(websocket, payload)
 
-    async def handle_utterance(audio_np: Optional[np.ndarray] = None, text_override: Optional[str] = None):
-        """Full pipeline: ASR (or text bypass) → LLM stream → TTS → audio."""
-        nonlocal history, current_task, is_speaking, last_activity, turn_epoch
+    class UserTextInput:
+        """Wrapper to distinguish user-typed text from mind initiative strings."""
+        def __init__(self, text: str):
+            self.text = text
+
+    async def handle_utterance(audio_np: Optional[np.ndarray] = None, text_override: Optional[str] = None, user_text: Optional[str] = None):
+        """Full pipeline: ASR (or text bypass or text input) → LLM stream → TTS → audio."""
+        nonlocal history, current_task, is_speaking, last_activity, turn_epoch, current_turn_mode
         last_activity = time.monotonic()
         supervisor._touch_human_activity()
         mind_interrupt.set()  # signal mind daemon to yield
@@ -579,6 +605,39 @@ async def ws_gary(websocket: WebSocket):
             _log_append("conversation", f"GARY (initiative): {text}")
             slog.log("initiative_utterance", "mind", {"text": text}, turn=turn_epoch)
             history.append({"role": "system", "content": f"INTERNAL DIRECTIVE: You must take the following initiative right now: {text}"})
+        elif user_text:
+            # ── Text Input (typed by developer) ─────────────────────────────
+            text = user_text
+            await _set_state("thinking")
+
+            log.info(f"[gary] user (typed): {text!r}")
+            _log_append("conversation", f"User (typed): {text}")
+            preview = text if len(text) <= 220 else text[:217] + "…"
+            await _pipeline_log(websocket, "sys", f"⌨️ Text Input: {preview}")
+            await _safe_send_json(websocket, {"type": "text_transcript", "text": text})
+
+            # v5: Floor -> ASR_PENDING (blocks mind daemon while we think)
+            import uuid
+            supervisor.on_transcript(uuid.uuid4())
+
+            # ── Session log: text input ──
+            slog.log("text_input", "user", {"text": text}, turn=turn_epoch)
+            slog.log_condensed("user", "typed", text, {}, turn=turn_epoch)
+
+            # v4: Classify turn complexity
+            current_turn_mode = classify_turn(text)
+            await _pipeline_log(websocket, "sys", f"Turn mode: {current_turn_mode.value}")
+            await _safe_send_json(websocket, {"type": "turn_mode", "mode": current_turn_mode.value})
+            slog.log("turn_mode", "sys", {"mode": current_turn_mode.value}, turn=turn_epoch)
+
+            # Pre-baked WAV only for non-snap turns
+            if current_turn_mode != TurnMode.SNAP:
+                filler = get_filler_wav_bytes(STATIC_DIR)
+                if filler and not interrupt_event.is_set():
+                    await _safe_send_json(websocket, {"type": "audio_start", "epoch": turn_epoch})
+                    await _safe_send_bytes(websocket, filler)
+
+            history.append({"role": "user", "content": text})
         else:
             # ── ASR ──────────────────────────────────────────────────────────────
             await _set_state("thinking")
@@ -646,7 +705,7 @@ async def ws_gary(websocket: WebSocket):
 
         # ── LLM + TTS pipeline (cancellable co-routine) ────────────────────
         async def _generate_and_speak():
-            nonlocal is_speaking, history, last_activity, turn_epoch
+            nonlocal is_speaking, history, last_activity, turn_epoch, mind_task
             assistant_text = ""
             llm_line_open = False
             llm_t0 = time.time()
@@ -692,6 +751,7 @@ async def ws_gary(websocket: WebSocket):
             if not gate_acquired:
                 await _pipeline_log(websocket, "sys",
                     "⚠️ Could not acquire LLM — skipping generation", append=False)
+                supervisor.end_turn(reason="llm_gate_timeout")  # Release floor so next turn isn't blocked
                 await _set_state("listening")
                 return
 
@@ -710,7 +770,9 @@ async def ws_gary(websocket: WebSocket):
                             await _pipeline_log(websocket, "llm", f"[TTFT {ttft}ms] ", append=False)
                             first_token = False
                         # Send raw token to browser (frontend renders markdown)
-                        raw_text = event["text"]
+                        raw_text = sanitize_token(event["text"])
+                        if not raw_text:
+                            continue
                         await _safe_send_json(websocket, {"type": "token", "text": raw_text})
                         assistant_text += raw_text
                         # Console gets the cleaned version for readability
@@ -732,7 +794,7 @@ async def ws_gary(websocket: WebSocket):
                         slog.log("llm_think_token", "llm", {"text": event["text"]}, turn=turn_epoch)
 
                     elif event["type"] == "sentence":
-                        sentence = _clean_for_voice(event["text"])
+                        sentence = sanitize_sentence(_clean_for_voice(event["text"]))
                         if not sentence:
                             continue
                         sp = sentence if len(sentence) <= 160 else sentence[:157] + "…"
@@ -749,7 +811,7 @@ async def ws_gary(websocket: WebSocket):
                         slog.log("tts_start", "tts", {
                             "sentence": sentence, "char_count": len(sentence),
                         }, turn=turn_epoch)
-                        wav_bytes = await tts.synthesize(sentence)
+                        wav_bytes = await tts.synthesize(normalize_for_tts(sentence))
                         tts_ms = int((time.time() - tts_t0) * 1000)
                         if wav_bytes and not interrupt_event.is_set():
                             await _pipeline_log(
@@ -851,7 +913,9 @@ async def ws_gary(websocket: WebSocket):
         """Drain utterance queue and run handle_utterance sequentially."""
         while True:
             item = await utterance_queue.get()
-            if isinstance(item, str):
+            if isinstance(item, UserTextInput):
+                await handle_utterance(user_text=item.text)
+            elif isinstance(item, str):
                 await handle_utterance(text_override=item)
             else:
                 await handle_utterance(audio_np=item)
@@ -869,14 +933,23 @@ async def ws_gary(websocket: WebSocket):
                 log.info("Initiative dropped — floor no longer idle (%s)",
                          supervisor.floor.value)
                 continue
+
+            # Always push the initiative text to the chat stream (silent)
+            await _safe_send_json(websocket, {"type": "mind_initiative", "text": text})
+            _log_append("conversation", f"GARY (initiative): {text}")
+
+            # Only produce audio if mind_audio_enabled is toggled on
+            if not mind_audio_enabled:
+                log.info("Initiative text-only (audio muted): %s", text[:80])
+                continue
+
             # Speak the initiative through its own audio envelope
-            supervisor._transition(FloorState.AGENT_SPEAKING, reason="initiative")
             try:
                 is_speaking = True
-                supervisor.set_speaking()  # v5: sync supervisor
+                supervisor.set_speaking()  # Claims floor as ASSISTANT
                 is_speaking_since = time.monotonic()
                 await _safe_send_json(websocket, {"type": "audio_start", "epoch": turn_epoch})
-                wav_bytes = await tts.synthesize(text)
+                wav_bytes = await tts.synthesize(normalize_for_tts(text))
                 if wav_bytes and not interrupt_event.is_set():
                     await _safe_send_bytes(websocket, wav_bytes)
                 await _set_state("listening")
@@ -900,6 +973,7 @@ async def ws_gary(websocket: WebSocket):
         avoid_topics: list[str],
         affect_summary_str: str,
         recent_conv: list[str],
+        stale_streak: int,
     ) -> dict | None:
         """Call mindd sidecar for a pulse. Returns result dict or None on failure."""
         mindd_url = os.getenv("GARY_MINDD_URL", "http://127.0.0.1:7863")
@@ -914,6 +988,7 @@ async def ws_gary(websocket: WebSocket):
                         "affect_summary": affect_summary_str,
                         "open_loops": [],
                         "recent_conversation": recent_conv,
+                        "stale_streak": stale_streak,
                     },
                 )
                 if resp.status_code != 200:
@@ -934,6 +1009,7 @@ async def ws_gary(websocket: WebSocket):
         avoid_topics: list[str],
         affect_summary_str: str,
         recent_conv: list[str],
+        stale_streak: int,
     ) -> dict | None:
         """Run remote mind HTTP concurrently with mind_interrupt (user voice)."""
         if mind_interrupt.is_set():
@@ -946,6 +1022,7 @@ async def ws_gary(websocket: WebSocket):
                 avoid_topics,
                 affect_summary_str,
                 recent_conv,
+                stale_streak,
             )
         )
         intr_task = asyncio.create_task(mind_interrupt.wait())
@@ -1110,7 +1187,7 @@ async def ws_gary(websocket: WebSocket):
                 if _mind_remote_enabled():
                     result = await _remote_mind_pulse_raced(
                         phase, thought_history, avoid_topics,
-                        affect_summary, recent_conv,
+                        affect_summary, recent_conv, deduplicator._stale_streak,
                     )
                     if result is None:
                         continue
@@ -1245,6 +1322,7 @@ async def ws_gary(websocket: WebSocket):
                             open_loops=[],
                             recent_conversation=recent_conv,
                             json_mode=use_mind_json,
+                            stale_streak=deduplicator._stale_streak,
                         )
 
                         full_text = ""
@@ -1388,18 +1466,21 @@ async def ws_gary(websocket: WebSocket):
     })
 
     # Serve from disk if available; lazy-generate on first ever boot
-    greeting_wav_path = STATIC_DIR / "audio" / "greeting.wav"
+    # v4.1: per-voice greeting caching
+    voice_name = tts.get_voice()
+    greeting_wav_path = STATIC_DIR / "audio" / "voices" / f"{voice_name}_greeting.wav"
     greeting_wav: bytes = b""
+
     if greeting_wav_path.exists():
         try:
             greeting_wav = greeting_wav_path.read_bytes()
-            await _pipeline_log(websocket, "tts", f"Greeting audio: {len(greeting_wav)//1024}KB (pre-baked) → browser")
+            await _pipeline_log(websocket, "tts", f"Greeting audio ({voice_name}): {len(greeting_wav)//1024}KB (cached) → browser")
         except OSError as exc:
             log.warning("Failed to read greeting WAV: %s", exc)
 
     if not greeting_wav:
-        # First boot or file missing — synthesize and cache for next time
-        await _pipeline_log(websocket, "tts", "Greeting · synthesizing (first boot)…")
+        # First time for this voice — synthesize and cache
+        await _pipeline_log(websocket, "tts", f"Greeting ({voice_name}) · synthesizing…")
         greeting_wav = await tts.synthesize(greeting)
         if greeting_wav:
             try:
@@ -1529,6 +1610,27 @@ async def ws_gary(websocket: WebSocket):
                     await _pipeline_log(websocket, "sys", "Chat history cleared")
                     await _safe_send_json(websocket, {"type": "cleared"})
 
+                elif cmd.get("type") == "text_input":
+                    raw_text = (cmd.get("text") or "").strip()
+                    if raw_text:
+                        # Interrupt any active speech/generation
+                        if current_task and not current_task.done():
+                            interrupt_event.set()
+                            current_task.cancel()
+                        vad.finalize()
+                        vad.preempt_for_user()
+                        utterance_queue.put_nowait(UserTextInput(raw_text))
+
+                elif cmd.get("type") == "toggle_mind_audio":
+                    mind_audio_enabled = not mind_audio_enabled
+                    log.info(f"Mind audio {'enabled' if mind_audio_enabled else 'disabled'}")
+                    await _safe_send_json(websocket, {
+                        "type": "mind_audio_state",
+                        "enabled": mind_audio_enabled,
+                    })
+                    await _pipeline_log(websocket, "sys",
+                        f"Mind audio {'🔊 ON' if mind_audio_enabled else '🔇 OFF'}")
+
                 elif cmd.get("type") == "set_voice":
                     voice = cmd.get("voice", "")
                     ok = tts.set_voice(voice)
@@ -1544,6 +1646,11 @@ async def ws_gary(websocket: WebSocket):
 
     except WebSocketDisconnect:
         log.info(f"[gary] disconnected: {websocket.client}")
+    except RuntimeError as exc:
+        if "disconnect message has been received" in str(exc):
+            log.info(f"[gary] disconnected implicitly: {websocket.client}")
+        else:
+            log.exception(f"[gary] error: {exc}")
     except Exception as exc:
         log.exception(f"[gary] error: {exc}")
     finally:

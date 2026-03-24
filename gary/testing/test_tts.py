@@ -18,7 +18,7 @@ import pipeline.tts as tts_module
 
 class TestVoiceManagement:
     def test_get_voice_default(self):
-        assert tts_module.get_voice() == "af_heart"
+        assert tts_module.get_voice() == "am_adam"
 
     def test_get_voices_without_model(self):
         """Without a loaded model, get_voices returns empty list."""
@@ -109,7 +109,7 @@ class TestCachePaths:
 
 class TestVoiceConstants:
     def test_default_voice(self):
-        assert tts_module._VOICE == "af_heart"
+        assert tts_module._VOICE == "am_adam"
 
     def test_sample_rate(self):
         assert tts_module._sample_rate == 24000

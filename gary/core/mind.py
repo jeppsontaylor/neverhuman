@@ -62,9 +62,9 @@ PHASE_COOLDOWNS = {
 }
 
 PHASE_TEMPERATURES = {
-    PHASE_REFLECTING:    0.6,
+    PHASE_REFLECTING:    0.4,
     PHASE_BRAINSTORMING: 0.85,
-    PHASE_DREAMING:      1.0,
+    PHASE_DREAMING:      1.3,
 }
 
 PHASE_LABELS = {
@@ -77,7 +77,7 @@ PHASE_LABELS = {
 MIN_IDLE_FOR_THOUGHT = 30.0
 
 # Max consecutive repetitive thoughts before pausing
-MAX_STALE_STREAK = 3
+MAX_STALE_STREAK = 2
 STALE_PAUSE_SECS = 30  # 30s pause after stale streak
 
 # Max thought blocks retained in the rolling context
@@ -94,7 +94,7 @@ MAX_INITIATIVE_PER_HOUR = 3
 MAX_MIND_PANEL_NODES = 50
 
 # Similarity threshold for dedup (cosine)
-SIMILARITY_THRESHOLD = 0.85
+SIMILARITY_THRESHOLD = 0.55
 
 # ── Initiative regex ─────────────────────────────────────────────────────────
 _INITIATIVE_RE = re.compile(r'\[INITIATIVE:\s*(.+?)\]\s*$', re.DOTALL)
@@ -174,6 +174,8 @@ def build_mind_prompt(
     recent_conversation: list[str],
     *,
     json_mode: bool = False,
+    stale_streak: int = 0,
+    context_sparks: list[str] = None,
 ) -> list[dict]:
     """Build the messages array for a mind pulse.
 
@@ -211,15 +213,25 @@ def build_mind_prompt(
         parts = [MIND_SYSTEM_PROMPT, ""]
 
     if recent_thoughts:
-        parts.append("Your recent internal thoughts (BUILD ON THESE):")
+        parts.append("Your recent internal thoughts. RULE: You must pivot to a completely new domain. DO NOT repeat, rephrase, or append to these thoughts:")
         parts.append("---")
-        for i, t in enumerate(recent_thoughts[-5:], 1):
+        for i, t in enumerate(recent_thoughts[-2:], 1):
             parts.append(f"[{i}] {t}")
         parts.append("---")
         parts.append("")
 
     if avoid_topics:
-        parts.append(f"DO NOT revisit these topics (already explored): {', '.join(avoid_topics[:10])}")
+        parts.append(f"FORBIDDEN CONCEPTS (DO NOT USE THESE WORDS): {', '.join(avoid_topics[:10])}")
+        parts.append("")
+
+    if stale_streak > 0:
+        parts.append("WARNING: You are stuck in a loop. You MUST instantly drop the current theme and hallucinate or brainstorm a completely unrelated scenario.")
+        parts.append("")
+
+    if context_sparks:
+        parts.append("Random Semantic Anchor (Use this as inspiration to break out of your current thought pattern):")
+        for spark in context_sparks:
+            parts.append(f"  - {spark}")
         parts.append("")
 
     if affect_summary:

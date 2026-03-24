@@ -44,6 +44,7 @@ class PulseRequest(BaseModel):
     affect_summary: str = ""
     open_loops: list[str] = []
     recent_conversation: list[str] = []
+    stale_streak: int = 0
 
 
 class PulseResponse(BaseModel):
@@ -90,6 +91,7 @@ async def pulse(req: PulseRequest, request: Request):
             affect_summary=req.affect_summary,
             open_loops=req.open_loops,
             recent_conversation=req.recent_conversation,
+            stale_streak=req.stale_streak,
         )
     )
     disc_task = asyncio.create_task(_wait_client_disconnect(request))

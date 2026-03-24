@@ -670,7 +670,7 @@ body.resizing { cursor: col-resize !important; user-select: none !important; }
   from { opacity: 0; transform: translateY(12px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-.bubble-row.user  { align-items: flex-end; }
+.bubble-row.user, .bubble-row.user-typed { align-items: flex-end; }
 .bubble-row.gary { align-items: flex-start; }
 
 .bubble-role {
@@ -724,6 +724,68 @@ body.resizing { cursor: col-resize !important; user-select: none !important; }
   animation: cursor-blink 0.65s ease-in-out infinite;
 }
 @keyframes cursor-blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+/* ── Typed bubble: distinct from spoken ──────────────────────────── */
+.bubble-row.user-typed {
+  justify-content: flex-end;
+}
+.bubble-row.user-typed .bubble {
+  background: rgba(139, 92, 246, 0.10);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  border-radius: 8px 8px 2px 8px;
+}
+.bubble-row.user-typed .bubble-role {
+  color: rgba(139, 92, 246, 0.7);
+}
+
+/* ── Text input bar ─────────────────────────────────────────────── */
+.text-input-wrap {
+  display: flex;
+  gap: 8px;
+  padding: 10px 16px;
+  background: rgba(255,255,255,0.03);
+  border-top: 1px solid rgba(255,255,255,0.06);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.text-input-wrap input {
+  flex: 1;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: var(--fg);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s, background 0.2s;
+}
+.text-input-wrap input:focus {
+  border-color: rgba(139, 92, 246, 0.5);
+  background: rgba(255,255,255,0.08);
+}
+.text-input-wrap input:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.text-input-wrap button {
+  background: rgba(139, 92, 246, 0.15);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  border-radius: 8px;
+  color: rgba(139, 92, 246, 0.9);
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.1s;
+}
+.text-input-wrap button:hover:not(:disabled) {
+  background: rgba(139, 92, 246, 0.25);
+  transform: translateY(-1px);
+}
+.text-input-wrap button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
 
 /* Typing indicator */
 .typing-indicator {
@@ -1347,20 +1409,6 @@ body.resizing { cursor: col-resize !important; user-select: none !important; }
 </head>
 <body>
 
-<!-- ─── Activation Overlay (click-to-start = user gesture for AudioContext) ─── -->
-<div class="activate-overlay" id="activate-overlay">
-  <div class="activate-card">
-    <div class="activate-card-icon">
-      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <polygon points="5 3 19 12 5 21 5 3"/>
-      </svg>
-    </div>
-    <h2>Activate GARY</h2>
-    <p>Click to start your personal AI assistant. Audio and microphone will be enabled automatically.</p>
-    <button class="btn-activate" id="btn-activate">Start GARY</button>
-  </div>
-</div>
-
 <!-- ─── Mic Permission Overlay ─── -->
 <div class="mic-overlay" id="mic-overlay">
   <div class="mic-card">
@@ -1495,6 +1543,12 @@ body.resizing { cursor: col-resize !important; user-select: none !important; }
       </div>
     </div>
 
+    <!-- Text input bar -->
+    <form class="text-input-wrap" id="text-input-form" autocomplete="off">
+      <input type="text" id="text-input-field" placeholder="Type a message..." />
+      <button type="submit" id="text-input-btn">Send</button>
+    </form>
+
   </main>
 
   <!-- ── Mind Stream Dock (LEFT — 3-lane) ── -->
@@ -1506,6 +1560,7 @@ body.resizing { cursor: col-resize !important; user-select: none !important; }
         <span class="mode-chip" data-mode="brainstorming">B</span>
         <span class="mode-chip" data-mode="dreaming">D</span>
       </div>
+      <button class="mind-panel-toggle" id="mind-audio-toggle" title="Toggle mind audio" style="font-size:14px;margin-right:4px;opacity:0.5">🔇</button>
       <button class="mind-panel-toggle" id="mind-toggle-btn" title="Hide Mind Stream">✕</button>
     </div>
 
@@ -1707,21 +1762,21 @@ function pushLog(service, text, append, ts) {
   const valid = ['asr','llm','tts','sys','think','mind'];
   const cls = 'log-' + (valid.includes(svc) ? svc : 'sys');
 
-  if (append && consoleBody.firstElementChild) {
-    const first = consoleBody.firstElementChild;
-    if (first.classList.contains(cls)) {
-      const msgEl = first.querySelector('.log-msg');
+  if (append && consoleBody.lastElementChild) {
+    const last = consoleBody.lastElementChild;
+    if (last.classList.contains(cls)) {
+      const msgEl = last.querySelector('.log-msg');
       if (msgEl) {
         msgEl.textContent += text;
-        if (!consolePaused) consoleScroll.scrollTop = 0;
+        if (!consolePaused) consoleScroll.scrollTop = consoleScroll.scrollHeight;
         return;
       }
     }
   }
 
-  // Trim old lines from the bottom
+  // Trim old lines from the top (since latest are at bottom)
   while (consoleBody.children.length >= MAX_LOG_LINES) {
-    consoleBody.removeChild(consoleBody.lastElementChild);
+    consoleBody.removeChild(consoleBody.firstElementChild);
   }
 
   const row = document.createElement('div');
@@ -1742,9 +1797,9 @@ function pushLog(service, text, append, ts) {
   row.appendChild(tsEl);
   row.appendChild(badge);
   row.appendChild(msg);
-  consoleBody.prepend(row);
+  consoleBody.appendChild(row);
 
-  if (!consolePaused) consoleScroll.scrollTop = 0;
+  if (!consolePaused) consoleScroll.scrollTop = consoleScroll.scrollHeight;
 }
 
 // ─── Chat bubbles ─────────────────────────────────────────────────────────────
@@ -1837,7 +1892,7 @@ function addBubble(role, text, streaming) {
 
   const roleEl = document.createElement('div');
   roleEl.className = 'bubble-role';
-  roleEl.textContent = role === 'user' ? 'You' : 'GARY';
+  roleEl.textContent = (role === 'user' || role === 'user-typed') ? 'You' : 'GARY';
 
   const bubble = document.createElement('div');
   bubble.className = 'bubble' + (streaming ? ' streaming' : '');
@@ -2718,17 +2773,30 @@ const ALL_GROUPS = [
 ];
 
 let allVoices = [];
-let currentVoice = 'af_heart';
+let currentVoice = 'am_adam';
 
-async function fetchVoices() {
+async function fetchVoices(retries = 3) {
+  const dropdown = document.getElementById('voice-select');
+  if (dropdown && (!dropdown.options || dropdown.options.length <= 1)) {
+    dropdown.innerHTML = '<option disabled selected>Loading voices...</option>';
+  }
+
   try {
     const res = await fetch('/api/voices');
     const data = await res.json();
     allVoices = data.voices || [];
-    currentVoice = data.current || 'af_heart';
+    
+    if (allVoices.length === 0 && retries > 0) {
+      console.log(`Voices not ready, retrying... (${retries} left)`);
+      setTimeout(() => fetchVoices(retries - 1), 1000);
+      return;
+    }
+
+    currentVoice = data.current || 'am_adam';
     buildVoiceDropdown(allVoices, currentVoice);
   } catch (e) {
     console.warn('Could not fetch voices:', e);
+    if (retries > 0) setTimeout(() => fetchVoices(retries - 1), 2000);
   }
 }
 
@@ -2837,10 +2905,13 @@ function connect() {
         finalizeStream();
         removeTypingIndicator();
         setState('listening');
+        toggleTextInput(true);
       } else if (s === 'thinking') {
         setState('thinking');
+        toggleTextInput(false, "Gary is thinking...");
       } else if (s === 'speaking') {
         setState('speaking');
+        toggleTextInput(false, "Gary is speaking...");
       }
       return;
     }
@@ -2876,10 +2947,17 @@ function connect() {
       return;
     }
 
-    // ── User transcript ──
+    // ── User transcript (spoken) ──
     if (msg.type === 'transcript') {
       removeTypingIndicator();
       addBubble('user', msg.text, false);
+      return;
+    }
+
+    // ── User transcript (typed) ──
+    if (msg.type === 'text_transcript') {
+      removeTypingIndicator();
+      addBubble('user-typed', msg.text, false);
       return;
     }
 
@@ -2918,6 +2996,19 @@ function connect() {
     // v3.1: audio_start signals beginning of a new audio stream for an epoch
     if (msg.type === 'audio_start') {
       acceptingAudioForEpoch = msg.epoch;
+      return;
+    }
+
+    // ── Mind audio toggle confirmation ──
+    if (msg.type === 'mind_audio_state') {
+      if (window._updateMindAudioBtn) window._updateMindAudioBtn(msg.enabled);
+      return;
+    }
+
+    // ── Mind initiative (text-only, no audio by default) ──
+    if (msg.type === 'mind_initiative') {
+      // Show as a streaming-style GARY bubble
+      addBubble('gary', msg.text, false);
       return;
     }
 
@@ -2997,8 +3088,11 @@ function connect() {
   ws.onerror = () => showError('WebSocket error — reconnecting…');
 }
 
-// ─── Orb click = interrupt ────────────────────────────────────────────────────
+// ─── Orb click = interrupt or fallback activation ─────────────────────────────
 document.getElementById('orb-btn').addEventListener('click', () => {
+  // If the browser blocked Web Audio autoplay on page load, this click unblocks it
+  ensurePlaybackCtx();
+
   if (currentState === 'speaking' || currentState === 'thinking') {
     stopAllAudio();
     finalizeStream();
@@ -3060,6 +3154,61 @@ document.getElementById('btn-copy').addEventListener('click', () => {
   });
 });
 
+// ─── Mind Audio Toggle ───────────────────────────────────────────────────────
+{
+  const mindAudioBtn = document.getElementById('mind-audio-toggle');
+  let mindAudioOn = false;
+  mindAudioBtn.addEventListener('click', () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'toggle_mind_audio' }));
+    }
+  });
+  // Listen for server confirmation
+  const origOnMsg = ws ? ws.onmessage : null;
+  // We'll hook into the main WS handler instead
+  window._updateMindAudioBtn = function(enabled) {
+    mindAudioOn = enabled;
+    mindAudioBtn.textContent = enabled ? '🔊' : '🔇';
+    mindAudioBtn.style.opacity = enabled ? '1' : '0.5';
+    mindAudioBtn.title = enabled ? 'Mind audio ON (click to mute)' : 'Mind audio OFF (click to unmute)';
+  };
+}
+
+// ─── Text Input Mode ──────────────────────────────────────────────────────────
+const textInputForm  = document.getElementById('text-input-form');
+const textInputField = document.getElementById('text-input-field');
+const textInputBtn   = document.getElementById('text-input-btn');
+
+function toggleTextInput(enabled, placeholder) {
+  // Input is NEVER disabled — users can always type to interrupt (like voice barge-in)
+  textInputField.placeholder = placeholder || 'Type a message...';
+  if (enabled) {
+    textInputField.focus();
+  }
+}
+
+textInputForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = textInputField.value.trim();
+  if (!text) return;
+
+  // 1. Stop any TTS currently playing (client-side instant halt)
+  stopAllAudio();
+
+  // 2. Also send an interrupt if GARY is active (server-side cancel)
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    if (currentState === 'speaking' || currentState === 'thinking') {
+      finalizeStream();
+      removeTypingIndicator();
+    }
+    ws.send(JSON.stringify({ type: 'text_input', text: text }));
+  }
+
+  // 3. Clear immediately to prevent double-send
+  textInputField.value = '';
+  textInputField.placeholder = 'Gary is thinking...';
+});
+
 // ─── Mic grant overlay re-try ─────────────────────────────────────────────────
 document.getElementById('mic-grant-btn').addEventListener('click', () => {
   document.getElementById('mic-overlay').classList.remove('show');
@@ -3074,15 +3223,10 @@ document.getElementById('mic-grant-btn').addEventListener('click', () => {
 // ─── Start orb canvas animation ───────────────────────────────────────────────
 drawOrb();
 
-// ─── Activation overlay — user gesture unlocks AudioContext ───────────────────
-document.getElementById('btn-activate').addEventListener('click', () => {
-  // Create playback AudioContext inside user gesture = guaranteed unlocked
+// ─── Auto-Start Sequence ──────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  // Attempt to auto-unlock AudioContext on load (browsers usually allow this on localhost)
   ensurePlaybackCtx();
-  // Fade out overlay
-  const overlay = document.getElementById('activate-overlay');
-  overlay.classList.add('hidden');
-  setTimeout(() => overlay.remove(), 500);
-  // Now connect WebSocket (server will send greeting audio)
   connect();
 });
 </script>

@@ -492,3 +492,46 @@ class TestInitiativeIsolation:
         supervisor.apply(Event.VAD_SPEECH_START)
         assert supervisor.background_eligible is False
 
+
+# ── LLM gate failure regression (04:26 session) ──────────────────────────────
+
+class TestGateFailureRegression:
+    """
+    Regression for the 04:26 session failure.
+    When the voice pipeline cannot acquire llm_gate (mind holds it),
+    end_turn() must release the floor and mark the turn as ERROR.
+    Without this fix, the floor stays stuck and the system goes silent.
+    """
+
+    def test_end_turn_on_gate_failure_marks_error(self, supervisor):
+        """When voice pipeline fails to acquire LLM, turn must be ERROR, not orphaned."""
+        tid = uuid4()
+        supervisor.apply(Event.TRANSCRIPT_READY, turn_id=tid)
+        supervisor.apply(Event.FOREGROUND_GEN_START, task=MagicMock())
+        # Simulate gate failure: end_turn called without TTS ever starting
+        supervisor.end_turn(reason="llm_gate_timeout")
+        assert supervisor._current_turn is None
+        assert supervisor.floor_owner == FloorOwner.NONE
+        assert supervisor.engagement == Engagement.COOLDOWN
+        assert supervisor._turn_history[-1].status == TurnStatus.ERROR
+        assert supervisor._turn_history[-1].failure_reason == "llm_gate_timeout"
+
+    def test_end_turn_releases_floor_for_next_turn(self, supervisor):
+        """After gate failure, the floor must not block subsequent user turns."""
+        supervisor.apply(Event.TRANSCRIPT_READY, turn_id=uuid4())
+        supervisor.apply(Event.FOREGROUND_GEN_START, task=MagicMock())
+        supervisor.end_turn(reason="llm_gate_timeout")
+        # Floor should be released — a new transcript must be accepted
+        tid2 = uuid4()
+        supervisor.apply(Event.TRANSCRIPT_READY, turn_id=tid2)
+        assert supervisor.floor_owner == FloorOwner.ASR
+        assert supervisor._current_turn.turn_id == tid2
+
+    def test_end_turn_prevents_premature_mind_pulse(self, supervisor):
+        """After gate failure + cooldown, background_eligible must be False during cooldown."""
+        supervisor.apply(Event.TRANSCRIPT_READY, turn_id=uuid4())
+        supervisor.apply(Event.FOREGROUND_GEN_START, task=MagicMock())
+        supervisor.end_turn(reason="llm_gate_timeout")
+        # Should be in cooldown — mind must NOT be eligible
+        assert supervisor.engagement == Engagement.COOLDOWN
+        assert supervisor.background_eligible is False

@@ -186,7 +186,7 @@ FastAPI + uvicorn monolith on port 7861 (HTTPS). Single file, no blueprints.
 | `GET` | `/` | Serves `static/index.html` |
 | `GET` | `/static/*` | Static files (processor.js, etc.) |
 | `GET` | `/health` | JSON: `{status, tts, llm_live}` |
-| `GET` | `/api/voices` | Returns `{voices: [...], current: "af_heart"}` |
+| `GET` | `/api/voices` | Returns `{voices: [...], current: "am_adam"}` |
 | `GET` | `/api/memory_status` | JSON: `{asr_loaded, tts_loaded, free_ram_gb, mem_warn}` |
 | `GET` | `/api/logs/latest/{type}` | Download most recent session log (`condensed` or `detailed` JSONL) |
 | `GET` | `/logs/api/{name}` | Raw log text by name (`conversation`, `mind_stream`, `websocket`) with byte offset for polling |
@@ -1417,7 +1417,7 @@ Before any phase ships:
 | `mind.py` | Phase triggers | 30s/120s/300s | Reflection/Brainstorm/Dream thresholds |
 | `mind.py` | Phase cooldowns | 15s/30s/60s | Minimum delay between pulses |
 | `mind.py` | `MIN_IDLE_FOR_THOUGHT` | 30.0 | Minimum idle seconds before any thought |
-| `tts.py` | `_VOICE` | `af_heart` | Default TTS voice |
+| `tts.py` | `_VOICE` | `am_adam` | Default TTS voice |
 | `processor.js` | `CHUNK_SZ` | 1280 | AudioWorklet chunk (80ms, v3.1) |
 | `server.py` | `IS_SPEAKING_TIMEOUT` | 30.0 | v3.2: hard cap seconds before `is_speaking` failsafe reset |
 | `server.py` | `IDLE_TIMEOUT_SEC` | 300 | Unload ASR/TTS after 5 min idle (saves ~1.55GB) |

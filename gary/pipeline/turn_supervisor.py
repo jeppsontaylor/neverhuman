@@ -369,10 +369,12 @@ class TurnSupervisor:
             self.last_attention_release = time.monotonic()
 
         elif event == Event.END_TURN:
+            reason = kwargs.get("reason", "turn_dropped")
             if self._current_turn and self._current_turn.status in (
                 TurnStatus.PENDING, TurnStatus.ANSWERING
             ):
-                self._current_turn.status = TurnStatus.ANSWERED
+                self._current_turn.status = TurnStatus.ERROR
+                self._current_turn.failure_reason = reason
                 self._current_turn.answer_ended_at = time.monotonic()
                 self._turn_history.append(self._current_turn)
                 self._current_turn = None
@@ -461,9 +463,9 @@ class TurnSupervisor:
         """Browser confirmed playback complete."""
         self.apply(Event.TTS_FINISHED)
 
-    def end_turn(self) -> None:
-        """Mark the turn as complete (if tts_finished was not called)."""
-        self.apply(Event.END_TURN)
+    def end_turn(self, reason: str = "turn_dropped") -> None:
+        """Mark the turn as complete/errored (if tts_finished was not called)."""
+        self.apply(Event.END_TURN, reason=reason)
 
     def enter_maintenance(self) -> None:
         """Self-edit starting."""

@@ -241,7 +241,10 @@ body{
       <input class="token-input" id="hf-token-asr" type="password" placeholder="hf_…">
       <span class="token-toggle" onclick="toggleToken('asr')">Show</span>
     </div>
-    <button class="btn btn-primary btn-sm" id="btn-asr" onclick="startDownload('asr')">Download</button>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-sm" id="btn-asr" onclick="startDownload('asr')">Download</button>
+      <button class="btn btn-sm" id="btn-cancel-asr" onclick="cancelDownload('asr')" style="display:none;background:rgba(248,113,113,0.15);color:var(--danger);border:1px solid rgba(248,113,113,0.3)">Cancel</button>
+    </div>
     <div class="progress-wrap" id="prog-asr" style="display:none">
       <div class="progress-row">
         <span class="progress-label" id="prog-label-asr">Downloading…</span>
@@ -271,7 +274,10 @@ body{
       <input class="token-input" id="hf-token-tts" type="password" placeholder="hf_…">
       <span class="token-toggle" onclick="toggleToken('tts')">Show</span>
     </div>
-    <button class="btn btn-primary btn-sm" id="btn-tts" onclick="startDownload('tts')">Download</button>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-sm" id="btn-tts" onclick="startDownload('tts')">Download</button>
+      <button class="btn btn-sm" id="btn-cancel-tts" onclick="cancelDownload('tts')" style="display:none;background:rgba(248,113,113,0.15);color:var(--danger);border:1px solid rgba(248,113,113,0.3)">Cancel</button>
+    </div>
     <div class="progress-wrap" id="prog-tts" style="display:none">
       <div class="progress-row">
         <span class="progress-label" id="prog-label-tts">Downloading…</span>
@@ -307,7 +313,10 @@ body{
       <input class="token-input" id="hf-token-llm" type="password" placeholder="hf_…">
       <span class="token-toggle" onclick="toggleToken('llm')">Show</span>
     </div>
-    <button class="btn btn-primary btn-sm" id="btn-llm" onclick="startDownload('llm')">Download</button>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-sm" id="btn-llm" onclick="startDownload('llm')">Download</button>
+      <button class="btn btn-sm" id="btn-cancel-llm" onclick="cancelDownload('llm')" style="display:none;background:rgba(248,113,113,0.15);color:var(--danger);border:1px solid rgba(248,113,113,0.3)">Cancel</button>
+    </div>
     <div class="progress-wrap" id="prog-llm" style="display:none">
       <div class="progress-row">
         <span class="progress-label" id="prog-label-llm">Downloading…</span>
@@ -324,7 +333,7 @@ body{
 <div class="launch-box" id="launch-box">
   <h2>✅ GARY is ready</h2>
   <p>All models downloaded. Click below to start your first conversation.</p>
-  <button class="btn-launch" onclick="location.href='/'">Launch GARY →</button>
+  <button class="btn-launch" onclick="location.href='/chat'">Launch GARY →</button>
 </div>
 
 <script>
@@ -432,9 +441,11 @@ function startDownload(cat) {
   const progStats = document.getElementById('prog-stats-' + cat);
   const progLabel = document.getElementById('prog-label-' + cat);
   const btnEl   = document.getElementById('btn-' + cat);
+  const cancelBtn = document.getElementById('btn-cancel-' + cat);
 
   btnEl.disabled = true;
   btnEl.textContent = 'Starting…';
+  if (cancelBtn) cancelBtn.style.display = 'inline-flex';
   progWrap.style.display = 'block';
   progBar.className = 'progress-bar indeterminate';
   progMsg.textContent = 'Connecting…';
@@ -482,6 +493,7 @@ function startDownload(cat) {
       // Update status
       status[modelId] = { ...(status[modelId] || {}), ready: true, path: evt.path };
       refreshCardInfo(cat);
+      if (cancelBtn) cancelBtn.style.display = 'none';
       es.close();
       delete activeSSE[cat];
       checkAllDone();
@@ -496,6 +508,7 @@ function startDownload(cat) {
       progStats.textContent = '';
       btnEl.disabled = false;
       btnEl.textContent = 'Retry';
+      if (cancelBtn) cancelBtn.style.display = 'none';
       es.close();
       delete activeSSE[cat];
     }
@@ -504,6 +517,41 @@ function startDownload(cat) {
   es.onerror = () => {
     progMsg.textContent = 'Connection lost — retrying…';
   };
+}
+
+async function cancelDownload(cat) {
+  const sel = document.getElementById('sel-' + cat);
+  const modelId = sel.value;
+  
+  if (activeSSE[cat]) {
+    activeSSE[cat].close();
+    delete activeSSE[cat];
+  }
+
+  try {
+    await fetch('/api/setup/download/' + encodeURIComponent(modelId), { method: 'DELETE' });
+  } catch (e) {
+    console.error('Cancel failed', e);
+  }
+
+  const btnEl = document.getElementById('btn-' + cat);
+  const cancelBtn = document.getElementById('btn-cancel-' + cat);
+  const progWrap = document.getElementById('prog-' + cat);
+  const progBar = document.getElementById('prog-bar-' + cat);
+  const progLabel = document.getElementById('prog-label-' + cat);
+  const progMsg = document.getElementById('prog-msg-' + cat);
+  const progStats = document.getElementById('prog-stats-' + cat);
+  
+  btnEl.disabled = false;
+  btnEl.textContent = 'Download';
+  if (cancelBtn) cancelBtn.style.display = 'none';
+  
+  progBar.className = 'progress-bar';
+  progBar.style.background = 'var(--danger)';
+  progBar.style.width = '100%';
+  progLabel.textContent = 'Cancelled';
+  progMsg.textContent = 'Download manually aborted by user.';
+  progStats.textContent = '';
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────

@@ -18,6 +18,7 @@ OUTPUT FORMAT:
 - If something feels genuinely useful when awake: [INITIATIVE: why this matters]
 
 RULES:
+- Produce EXACTLY ONE [IMAGINATION] block per pulse. Do not chain multiple thoughts or tags together.
 - EVERY output must be tagged [IMAGINATION:]
 - You are NOT generating facts. You are exploring possibility space.
 - Dream outputs are quarantined: they do NOT enter factual memory.

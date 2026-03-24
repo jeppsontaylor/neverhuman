@@ -42,7 +42,7 @@ _executor    = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gary-tts")
 _tts_loaded  = False
 _kokoro      = None
 _sample_rate = 24000
-_VOICE       = "af_heart"   # warm, natural female US English (changeable at runtime)
+_VOICE       = os.getenv("GARY_TTS_VOICE", "am_adam")
 _last_use: float = 0.0      # monotonic timestamp of last synthesize() call
 _tts_just_loaded = False     # one-shot flag: True after first lazy load
 
@@ -102,13 +102,37 @@ def _sync_load() -> None:
 # ── Voice management ──────────────────────────────────────────────────────────
 
 def get_voices() -> list[str]:
-    """Return all voices supported by the loaded model."""
+    """Return all voices supported by the loaded model. Triggers lazy-load if needed."""
+    if _kokoro is None:
+        # Load synchronously if not yet loaded.
+        # This ensures the browser's /api/voices call always gets a valid list.
+        _load_sync_internal()
+
     if _kokoro is None:
         return []
+
     try:
         return list(_kokoro.get_voices())
     except Exception:
         return []
+
+
+def _load_sync_internal():
+    """Core synchronous loading logic."""
+    global _tts_loaded, _kokoro, _sample_rate, _tts_just_loaded
+    if _kokoro is not None:
+        return
+    try:
+        from kokoro_onnx import Kokoro
+        model_path  = _ensure_file(_MODEL_URL,  _CACHE_DIR / "kokoro-v1.0.onnx")
+        voices_path = _ensure_file(_VOICES_URL, _CACHE_DIR / "voices-v1.0.bin")
+        _kokoro = Kokoro(str(model_path), str(voices_path))
+        _sample_rate = 24000
+        _tts_loaded = True
+        _tts_just_loaded = True
+        log.info(f"TTS ready (sync load) ✓ (voice={_VOICE})")
+    except Exception as exc:
+        log.warning(f"TTS sync load failed: {exc!r}")
 
 
 def get_voice() -> str:
@@ -165,8 +189,14 @@ async def synthesize(text: str) -> bytes:
     # Lazy-load under asyncio lock to prevent concurrent double-loads.
     async with _load_lock:
         if _kokoro is None:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(_executor, functools.partial(_sync_load))
+            _load_sync_internal()
+            if _tts_loaded:
+                # Warmup: pre-compile ONNX session to eliminate first-call latency spike.
+                try:
+                    await asyncio.get_event_loop().run_in_executor(_executor, _sync_run_kokoro, "Hello.")
+                    log.info("TTS warmup complete")
+                except Exception as e:
+                    log.debug(f"TTS warmup (non-fatal): {e}")
 
     _last_use = time.monotonic()
     loop = asyncio.get_event_loop()

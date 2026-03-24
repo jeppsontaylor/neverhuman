@@ -44,6 +44,8 @@ def test_hash_stable(monkeypatch):
 
 def test_context_pack_enabled(monkeypatch):
     monkeypatch.delenv("GARY_CONTEXT_PACK", raising=False)
-    assert context_pack_enabled() is False
+    assert context_pack_enabled() is True  # default ON
+    monkeypatch.setenv("GARY_CONTEXT_PACK", "0")
+    assert context_pack_enabled() is False  # explicit opt-out
     monkeypatch.setenv("GARY_CONTEXT_PACK", "1")
     assert context_pack_enabled() is True
