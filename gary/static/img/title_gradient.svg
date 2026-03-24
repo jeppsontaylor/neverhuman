@@ -1,0 +1,18 @@
+<svg width="400" height="80" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="cool-warm-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#8A2BE2;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#00D2FF;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@800&amp;display=swap');
+    .title {
+      font-family: 'Inter', sans-serif;
+      font-weight: 800;
+      font-size: 56px;
+      fill: url(#cool-warm-gradient);
+    }
+  </style>
+  <text x="50%" y="50" dominant-baseline="middle" text-anchor="middle" class="title">NeverHuman</text>
+</svg>

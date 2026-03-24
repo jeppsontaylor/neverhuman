@@ -1,8 +1,4 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/jeppsontaylor/neverhuman/main/gary/static/img/banner.png" alt="NeverHuman Banner" width="100%"/>
-</p>
-
-# <p align="center"><img src="https://readme-typing-svg.demolab.com?font=Inter&weight=800&size=48&duration=3000&pause=1000&color=00C6FF&center=true&vCenter=true&width=435&lines=NeverHuman" alt="NeverHuman" /></p>
+# <p align="center"><img src="gary/static/img/title_gradient.svg" alt="NeverHuman" width="400" /></p>
 
 <p align="center">
   <a href="https://github.com/jeppsontaylor/neverhuman/actions/workflows/ci.yml">
