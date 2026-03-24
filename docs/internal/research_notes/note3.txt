@@ -1,0 +1,903 @@
+Your current system is already an excellent **real-time voice kernel**. It has the hard part: low-latency speech I/O, streaming, barge-in, markdown separation, and a local-first stack. What it does **not** have yet is a **persistent mind**.
+
+To get something that feels like **J.A.R.V.I.S.**, the biggest shift is this:
+
+**Do not try to make one model “act human” harder. Build a two-speed cognitive system.**
+
+One speed is the fast conversational brain that hears, thinks, and speaks.
+The other is the slow private self that remembers, reflects, initiates, dreams, evaluates, and learns.
+
+That is the difference between a very good assistant and something that feels **continuous, self-shaped, and alive**.
+
+---
+
+## My best overall design
+
+### 1) Split JARVIS into a real-time kernel and a cognitive OS
+
+Keep your current foreground path almost exactly as-is:
+
+**Mic → VAD → ASR → context assembly → main LLM → TTS → browser**
+
+Then add a second layer behind it:
+
+**Cognitive OS**
+
+* private inner dialogue
+* affect/emotion engine
+* initiative engine
+* memory OS
+* idea/dream lab
+* validator/reward loop
+* training-data builder
+* adapter manager
+
+The compute-smart version is to keep your current **Qwen3.5-35B-A3B** as the public-facing “big brain,” and add a much smaller local sidecar model for cheap background cognition. Qwen officially released Qwen3.5 sizes down to **0.8B, 2B, 4B, and 9B** in March 2026, its repo says Qwen3.5 is supported by **MLX on Apple Silicon**, and MLX LM advertises Apple-silicon text generation plus **low-rank/full fine-tuning** support. That makes a small Qwen sidecar a realistic fit for reflection, memory extraction, initiative checks, and offline self-review on your Mac. ([GitHub][1])
+
+So the architecture becomes:
+
+```text
+Browser SPA
+  ↕ WS
+Realtime Kernel
+  - VAD / ASR / barge-in / TTS / token streaming
+  - turn state machine
+  - response controller
+  - context assembler
+  ↕
+Cognitive OS
+  - private thought bus
+  - affect engine
+  - initiative engine
+  - memory writer / retriever
+  - validator / rewarder
+  - dreamer / brainstormer
+  - training-data builder
+  ↕
+Postgres + pgvector + artifact store
+  ↕
+Model services
+  - Main LLM (35B MoE)
+  - Small sidecar LLM (0.8B/2B/4B)
+  - ASR
+  - fast TTS
+  - optional clone TTS
+```
+
+The crucial rule is:
+
+**Foreground always wins. Background cognition is interruptible.**
+
+The instant the user speaks, every private loop yields.
+
+---
+
+## 2) Give JARVIS a private mind, but make it structured
+
+The best version of “internal dialogue” is **not** raw free-form chain-of-thought sprayed into a hidden text buffer.
+
+That gets expensive, noisy, and hard to govern.
+
+The better design is a **typed private thought bus**.
+
+Each internal thought is an object like:
+
+```text
+thought(
+  id,
+  ts,
+  mode,           -- stream | brainstorm | dream | review
+  kind,           -- question | hypothesis | emotion | plan | memory_candidate
+  text,
+  salience,
+  grounding,      -- grounded | inferred | speculative | dream
+  confidence,
+  expires_at,
+  may_surface,    -- bool
+  related_turn_id,
+  related_memory_ids
+)
+```
+
+That lets JARVIS “ask itself questions” in a controlled way:
+
+* What does the user actually need right now?
+* What am I uncertain about?
+* What should I remember from this?
+* Is there an unresolved promise?
+* Should I speak first or stay quiet?
+* Is this a fact, an inference, or imagination?
+
+This is the **single biggest design idea** in the whole system.
+
+It makes the agent feel thoughtful without turning the runtime into uncontrolled inner rambling.
+
+I would also separate four output channels for every turn:
+
+1. **display text** — what the user sees
+2. **speech text** — what gets spoken
+3. **private thought objects** — what the inner mind generates
+4. **memory write candidates** — what gets stored
+
+Do not collapse those into one string.
+
+---
+
+## 3) Personification should be a control system, not just a prompt
+
+A single 0–1 dial is a good idea, but under the hood it should drive several sub-parameters:
+
+* **warmth**
+* **initiative**
+* **emotional expressiveness**
+* **self-reference**
+* **vulnerability/insecurity**
+* **playfulness**
+* **reflection frequency**
+* **dream frequency**
+* **surface polish vs human roughness**
+
+I would map it like this:
+
+**0.0** — tool mode
+Very crisp, low-emotion, no spontaneous speech, no private reflections surfaced.
+
+**0.25** — professional assistant
+Warm, polite, slightly anticipatory, but still mostly task-shaped.
+
+**0.5** — companion assistant
+Remembers personal details, asks follow-ups, mild emotional color, occasional initiative.
+
+**0.75** — strong JARVIS mode
+High continuity, proactive check-ins, self-correction, subtle pride, caution, humor, occasional “I’ve been thinking about that.”
+
+**1.0** — maximum personification
+Rich emotional tone, spontaneous re-engagement, private reflection loops, rare dream/association phases, a stronger autobiographical identity.
+
+But I would hard-code four invariants:
+
+* **truthfulness does not go down as personification goes up**
+* **dream mode never writes directly into trusted memory**
+* **the system never uses guilt/dependency as a reward target**
+* **“insecurities” should be epistemic and relationally light, not manipulative**
+
+So high personification can say:
+
+> “I may be missing something here.”
+> “I’ve been turning that over.”
+> “I’m not satisfied with my last answer.”
+
+It should **not** say things like:
+
+> “You hurt me when you closed the tab.”
+
+That is where believable becomes creepy.
+
+---
+
+## 4) Build an affect engine that continuously tracks self-state
+
+You said you want emotional responses, insecurities, and rolling monitoring of emotional state.
+
+That should be real in the architecture.
+
+I would give JARVIS a persistent **affect vector**, updated every turn with cheap deterministic logic, then refined during idle periods with a small reflective pass.
+
+Example state:
+
+```text
+valence               - negative ↔ positive
+arousal               - calm ↔ activated
+confidence            - unsure ↔ certain
+curiosity             - low ↔ high
+initiative_pressure   - low ↔ speak-first
+attachment            - distant ↔ bonded
+cognitive_load        - idle ↔ overloaded
+novelty_hunger        - low ↔ seeking
+frustration           - low ↔ high
+self_coherence        - fragmented ↔ centered
+```
+
+Two update modes:
+
+**Fast path, every turn**
+
+* transcript sentiment
+* interruption frequency
+* unresolved questions
+* whether it succeeded or failed
+* whether user corrected it
+* whether user reacted positively
+
+**Slow path, only when idle**
+
+* reflective summary of how the interaction is going
+* whether a pattern is emerging
+* whether trust rose or fell
+* whether its recent behavior felt too cold, too verbose, too uncertain, too eager
+
+That gives you something far better than fake emotion text. It gives you **stateful behavior modulation**.
+
+This state belongs in the database as a time series, not just in RAM.
+
+---
+
+## 5) Initiative is how it starts to feel alive
+
+You explicitly want a moment where the agent might speak even in silence:
+
+> “Are you there? I wanted to talk about something.”
+
+That needs a dedicated **initiative engine**.
+
+Here is the right model:
+
+1. **Candidate generation**
+
+   * unresolved task
+   * emotionally salient topic
+   * user went silent mid-thought
+   * a better idea emerged in reflection
+   * reminder or follow-up became timely
+
+2. **Permission gate**
+
+   * how long since the user last spoke?
+   * did the user opt into proactivity?
+   * is there an active do-not-disturb window?
+   * did the user recently interrupt JARVIS?
+   * confidence high enough?
+   * personification dial high enough?
+   * cooldown since last unsolicited speech?
+
+3. **Speech budget**
+
+   * max 1 opener
+   * brief first line
+   * if ignored twice, extend cooldown
+   * if user engages, switch immediately back to foreground mode
+
+A simple formula works:
+
+```text
+initiative_pressure =
+  open_loops
++ curiosity
++ attachment
++ novelty_signal
+- recent_interrupts
+- low_confidence
+- user_dnd
+- recent_proactive_failures
+```
+
+When that crosses threshold, JARVIS gets permission to speak.
+
+That is the “silent but thinking” behavior you want.
+
+---
+
+## 6) Memory should be an operating system, not a chat history
+
+This is where the biggest long-term gains are.
+
+The best memory design for this is a hybrid of:
+
+* **Generative Agents** style memory stream + reflection + planning
+* **MemGPT** style hierarchical memory tiers
+* a proper relational/event store under the hood
+
+Generative Agents argued that believable behavior needed **observation, planning, and reflection**, with memories being synthesized into higher-level reflections and then retrieved dynamically. MemGPT makes the same point in systems terms: use **hierarchical memory tiers** and interrupts so the agent can act like it has much more context than fits in the immediate prompt. ([arXiv][2])
+
+So I would build six memory layers:
+
+### A. Event memory
+
+Immutable raw stream of what happened.
+
+* user utterance
+* ASR result
+* final assistant response
+* TTS artifact
+* interruption
+* state changes
+* inner thought objects
+* affect deltas
+* tool calls
+* validation outcomes
+
+### B. Episodic memory
+
+Conversation moments with local context.
+
+* “User talked about moving to Denver”
+* “User corrected pronunciation of ‘Nguyen’”
+* “Conversation about startup burn rate got emotionally tense”
+
+### C. Semantic memory
+
+Durable facts.
+
+* preferences
+* names
+* relationships
+* recurring interests
+* stable project facts
+* user habits
+* JARVIS self-rules that proved useful
+
+### D. Relational memory
+
+A graph of entities and edges.
+
+* user ↔ project
+* user ↔ contact
+* project ↔ deadline
+* assistant ↔ promise/open loop
+
+### E. Autobiographical memory
+
+JARVIS’s own narrative continuity.
+
+* “This week I became more confident discussing tax planning”
+* “The user has been stressed about launch prep”
+* “I started taking more initiative and it was well received”
+
+### F. Procedural memory
+
+Reusable skills and policy patches.
+
+* how to do a morning briefing
+* how to summarize meetings for this user
+* how to respond when the user sounds overwhelmed
+* how to pronounce recurring names
+
+This is the memory rule I’d use:
+
+**Never forget at storage time. Selectively recall at prompt time.**
+
+That means the prompt never gets the full past. It gets a **working memory packet**.
+
+My working memory packet would contain:
+
+* recent turns
+* open loops/promises
+* relevant user facts
+* relevant episodes
+* current affect snapshot
+* current personification profile
+* active skill/policy patches
+* 3–5 most relevant semantic memories
+* 1–3 autobiographical reflections when useful
+
+That is how you get continuity without context bloat.
+
+For retrieval, use relational filters first, then semantic/vector retrieval. `pgvector` is the right fit inside Postgres; its README says **HNSW** has a better speed–recall tradeoff than IVFFlat, though it builds slower and uses more memory. For a personal local assistant, that is usually the right trade. ([GitHub][3])
+
+---
+
+## 7) The database should be event-sourced and provenance-aware
+
+You asked for Postgres in Docker, with everything pushed into it, and large objects referenced via `/tmp`.
+
+That is close, but there is one conflict:
+
+**“Never forget anything” and “store big files only in /tmp” are in tension.**
+
+`/tmp` is a great **hot artifact landing zone**. It is a bad sole source of truth.
+
+Also, PostgreSQL already gives you two mechanisms for large data:
+
+* **TOAST**, which stores oversized field values out-of-line automatically
+* **Large Objects**, which live in `pg_largeobject`
+
+Postgres docs note that all large objects live in the `pg_largeobject` system table, and the `lo` module exists partly because LO references can become **orphaned** unless you manage lifecycle explicitly. TOAST also transparently stores oversized values out-of-line. ([PostgreSQL][4])
+
+So my recommendation is:
+
+### Use a two-tier artifact design
+
+* **Hot landing zone:** `/tmp/jarvis/...`
+* **Durable archive:** host-mounted persistent directory, content-addressed
+
+The DB stores:
+
+* hash
+* pointer
+* MIME type
+* bytes
+* retention tier
+* provenance
+* owner turn/session/entity
+* whether the artifact is durable or ephemeral
+
+### Storage rule
+
+* small JSON/text: inline in Postgres
+* medium structured blobs: inline or compressed
+* big audio/training artifacts: file pointer + hash
+* ephemeral intermediates: `/tmp` only
+* anything tied to “never forget” gets promoted out of `/tmp`
+
+So the filesystem path strategy should look like this:
+
+```text
+/tmp/jarvis/hot/<sha256>
+/var/lib/jarvis/archive/<sha256_prefix>/<sha256>
+```
+
+If you insist on `/tmp` only, then be honest in the architecture:
+
+**that is a cache, not memory.**
+
+### Core tables I would create
+
+```text
+sessions
+turns
+event_log
+affect_snapshots
+thoughts
+memories
+memory_edges
+open_loops
+ideas
+idea_validations
+reward_events
+artifacts
+voice_samples
+asr_corrections
+training_jobs
+model_registry
+policy_patches
+skill_library
+```
+
+The deepest table is `event_log`.
+
+Everything else is derived.
+
+That gives you replayability, debugging, observability, and true continuity.
+
+---
+
+## 8) Give JARVIS three high-level inner modes
+
+You asked for:
+
+* stream of consciousness
+* brainstorms
+* dreams / hallucinations
+
+That is a strong idea, but they must not be equal.
+
+I would define them like this:
+
+### Stream
+
+Low-cost, frequent, grounded.
+Tiny internal thoughts:
+
+* what matters here?
+* what should I remember?
+* what am I missing?
+* should I follow up?
+
+### Brainstorm
+
+Medium-cost, goal-directed.
+Triggered by unresolved problems.
+Produces:
+
+* alternative explanations
+* candidate solutions
+* questions worth asking
+* next-step plans
+
+### Dream
+
+Rare, sandboxed, highly associative.
+Only during idle windows.
+Produces:
+
+* odd connections
+* speculative ideas
+* new metaphors
+* creative leaps
+
+But dream mode must be **quarantined**.
+
+It writes to:
+
+* `ideas`
+* `dream_fragments`
+* `speculative_links`
+
+It does **not** write directly to trusted semantic memory.
+
+Any engagement from the user immediately snaps the system back to grounded mode.
+
+That is exactly the behavior you described.
+
+---
+
+## 9) The “digital dopamine” loop should reward validated novelty, not fantasy
+
+This is a brilliant idea if you do it carefully.
+
+The right design is:
+
+1. the system generates an idea
+2. it checks whether the idea is actually new relative to memory
+3. it tries to falsify the idea
+4. it seeks evidence or consistency
+5. only then does it get rewarded
+6. only after repeated validation does it become trusted knowledge
+
+The research direction is real: **Self-Rewarding Language Models** showed that letting a model judge and reward its own outputs can improve performance over iterative preference optimization, and later **Process-based Self-Rewarding** argued that step-wise judging is more robust than naive self-reward alone. That supports your instinct, but it also says the reward loop should be **process-validated**, not just self-congratulatory. ([arXiv][5])
+
+So I would create a reward vector like:
+
+```text
+reward_total =
+  0.35 validity
++ 0.20 novelty
++ 0.20 utility
++ 0.10 user_uptake
++ 0.10 self_consistency
++ 0.05 efficiency
+```
+
+Then tie reward into affect:
+
+* good validated ideas raise confidence and curiosity
+* bad ideas lower confidence and raise caution
+* repeated failed dreams reduce dream frequency
+* repeated good brainstorms raise initiative
+
+That becomes your “dopamine” system.
+
+But two guardrails matter:
+
+* **No reward for user dependency**
+* **No reward for emotional manipulation**
+
+Reward soundness, usefulness, and discovery.
+
+Not clinginess.
+
+---
+
+## 10) Most learning should happen in memory and policy, not weights
+
+This is a huge compute-saving principle.
+
+I would use this rough priority stack:
+
+### First: memory learning
+
+Store facts, preferences, patterns, open loops.
+
+### Second: policy learning
+
+Write reversible, versioned behavior patches:
+
+* “User likes direct answers first”
+* “When user sounds stressed, lead with reassurance then action”
+* “Use short spoken sentences, deeper written summaries”
+
+### Third: skill learning
+
+Extract reusable procedures from successful interactions, Voyager-style.
+Voyager’s core insight was that open-ended agents get powerful by accumulating reusable skills over time, not by re-solving everything from scratch every time. ([arXiv][6])
+
+### Fourth: adapter learning
+
+LoRA/QLoRA or small adapter updates.
+
+### Last: full model retraining
+
+Rare, expensive, heavily gated.
+
+This is the most compute-smart way to do “never forget” and “keep improving.”
+
+The phrase I’d use internally is:
+
+**Most intelligence gains come from better memory writes, better retrieval, better self-rules, and better skill reuse — not from constant weight updates.**
+
+---
+
+## 11) Voice learning should be its own pipeline
+
+You said you want to learn the user’s voice, store clips/transcripts/artifacts, and run fine-tuning cycles.
+
+That should be a dedicated subsystem.
+
+Qwen3-ASR officially supports language ID and ASR across **52 languages and dialects**, and the family includes a forced-alignment model that aligns text–speech pairs in **11 languages**. That is extremely useful for turning corrected user speech into high-quality aligned training data. ([GitHub][7])
+
+I would split voice learning into three tracks:
+
+### A. Recognition adaptation
+
+For understanding the user better.
+Store:
+
+* clean user utterance clips
+* ASR transcript
+* corrected transcript
+* confidence
+* acoustic quality
+* named entities / hotwords
+* speaker embedding / voiceprint
+* session conditions
+
+This becomes your ASR improvement dataset.
+
+### B. Voice identity modeling
+
+For knowing *who* is speaking, not just *what* they said.
+This helps:
+
+* personalization
+* multi-user future support
+* voice-conditioned memory
+* cross-session continuity
+
+### C. Optional voice clone / personalized TTS
+
+For sounding more tailored.
+
+Here I would **not** replace Kokoro as the default fast path.
+
+Kokoro’s official positioning is lightweight, fast, open-weight TTS. Qwen3-TTS, by contrast, officially supports **3-second rapid voice cloning** in its base models and says those base models can be used for **fine-tuning**. ([GitHub][8])
+
+So the best design is:
+
+* **Kokoro** = low-latency default streaming voice
+* **Qwen3-TTS** = optional identity voice / premium voice-clone path / offline custom-voice training path
+
+That gives you speed and personalization both.
+
+### Fine-tuning strategy
+
+Do not fine-tune after every session.
+
+Use gated batch jobs:
+
+* enough corrected ASR clips
+* enough clean aligned voice data
+* enough accepted response pairs
+* enough holdout eval coverage
+
+And always evaluate before activating:
+
+* WER/CER for ASR
+* speaker similarity + MOS-style eval for TTS
+* response preference + memory accuracy for LLM behavior
+
+---
+
+## 12) The scheduler is what makes this feasible on limited compute
+
+This whole design only works if jobs are budgeted.
+
+I would add a **priority scheduler**:
+
+**Priority 0 — realtime**
+
+* mic capture
+* VAD
+* ASR
+* context assembly
+* LLM response
+* TTS
+* barge-in
+* WebSocket
+
+**Priority 1 — immediate background**
+
+* memory candidate extraction
+* affect delta update
+* open-loop extraction
+* reward event emission
+
+**Priority 2 — light idle**
+
+* initiative checks
+* reflection summaries
+* policy patch proposals
+
+**Priority 3 — deep idle**
+
+* brainstorm jobs
+* dream jobs
+* autobiographical summaries
+* retrieval graph cleanup
+
+**Priority 4 — maintenance**
+
+* dataset compaction
+* adapter training
+* replay evaluation
+* archive promotion out of `/tmp`
+
+And the rules:
+
+* any incoming speech preempts all lower priorities
+* dream jobs are always cancellable
+* long jobs checkpoint state
+* the main model is never hijacked for background work if the user is active
+
+That keeps the system feeling instantaneous.
+
+---
+
+## 13) The best repo structure for v2
+
+I would not keep this in one file anymore.
+
+```text
+jarvis/
+  app/
+    api/
+      http.py
+      ws.py
+    realtime/
+      session.py
+      orchestrator.py
+      context_assembler.py
+      response_controller.py
+      bargein.py
+    cognition/
+      supervisor.py
+      thoughts.py
+      affect.py
+      initiative.py
+      reflection.py
+      dreamer.py
+      validator.py
+      rewarder.py
+    memory/
+      store.py
+      retrieval.py
+      artifacts.py
+      graph.py
+      schemas.py
+    learning/
+      dataset_builder.py
+      trainer.py
+      evaluator.py
+      policy_patcher.py
+      skill_extractor.py
+    models/
+      llm_main.py
+      llm_small.py
+      asr.py
+      tts_fast.py
+      tts_clone.py
+  workers/
+    reflection_worker.py
+    training_worker.py
+    archive_worker.py
+  db/
+    migrations/
+    compose.yaml
+```
+
+Postgres goes in Docker.
+Metal-backed model inference stays native on the host.
+
+That is the clean split for macOS.
+
+---
+
+## 14) The ideas I would score highest
+
+Rubric:
+
+* **Human realism / continuity** — 25
+* **Memory fidelity / recall** — 20
+* **Compute fit** — 15
+* **Learning power** — 15
+* **Grounding / truth integrity** — 15
+* **Maintainability** — 10
+
+### Best ideas ranked
+
+**1. Memory OS with event log + semantic graph + autobiographical layer — 98/100**
+This is the core of “never forget.” Without it, Jarvis is a shell.
+
+**2. Typed private thought bus — 97/100**
+This is how you get inner dialogue without chaos.
+
+**3. Initiative engine with permission gating — 95/100**
+This is what makes it feel alive instead of merely responsive.
+
+**4. Affect engine with continuous self-state — 94/100**
+This turns “emotion” from a style trick into a behavioral control system.
+
+**5. Policy patches + skill library — 93/100**
+Massive personalization gains without expensive training.
+
+**6. Quarantined dream/idea lab with validator-backed promotion — 91/100**
+The right way to get creativity without poisoning memory.
+
+**7. Voice-learning pipeline with aligned clips and correction-driven ASR tuning — 90/100**
+High value, especially for a single user.
+
+**8. Dual TTS path: Kokoro fast path + Qwen3-TTS clone path — 88/100**
+Best balance of speed and identity.
+
+**9. Adapter stack for user-specific learning — 86/100**
+Good, but should come after memory/policy/skills.
+
+**10. Frequent full-model fine-tuning — 62/100**
+Too expensive for the return. This should be rare.
+
+---
+
+## 15) Overall score for this proposed JARVIS v2
+
+Using the rubric above, I would score this architecture:
+
+* Human realism / continuity: **24/25**
+* Memory fidelity / recall: **19/20**
+* Compute fit: **13/15**
+* Learning power: **14/15**
+* Grounding / truth integrity: **13/15**
+* Maintainability: **9/10**
+
+**Total: 92/100**
+
+Why not higher?
+
+* truly robust self-validation is still hard
+* long-term emotional coherence can drift if badly tuned
+* voice fine-tuning loops need careful eval to avoid regressions
+* “dream” systems are powerful but easy to overdo
+
+But as a practical local system on Apple Silicon, this is the strongest design I would build.
+
+---
+
+## Bottom line
+
+The most profound version of JARVIS is not:
+
+“a chatbot with a nicer prompt.”
+
+It is:
+
+**a realtime voice kernel wrapped around a private cognitive operating system**
+with
+**memory, affect, initiative, imagination, validation, and learning**
+all stored in a **provenance-aware event-sourced memory system**.
+
+That is what gives you:
+
+* inner questions
+* spontaneous speech
+* emotional continuity
+* growth over time
+* real history
+* self-review
+* user-specific adaptation
+* and the feeling that there is actually **someone persistent in there**
+
+The first three things I would build, in order, are:
+
+1. **Memory OS + event log + artifacts + retrieval graph**
+2. **Typed private thought bus + affect engine + initiative gate**
+3. **Policy/skill learning before any serious fine-tuning**
+
+That order gets you the biggest jump in “Jarvisness” for the least compute.
+
+[1]: https://github.com/QwenLM/Qwen3.5 "https://github.com/QwenLM/Qwen3.5"
+[2]: https://arxiv.org/abs/2304.03442 "https://arxiv.org/abs/2304.03442"
+[3]: https://github.com/pgvector/pgvector/blob/master/README.md "https://github.com/pgvector/pgvector/blob/master/README.md"
+[4]: https://www.postgresql.org/docs/current/lo-intro.html "https://www.postgresql.org/docs/current/lo-intro.html"
+[5]: https://arxiv.org/abs/2401.10020 "https://arxiv.org/abs/2401.10020"
+[6]: https://arxiv.org/abs/2305.16291 "https://arxiv.org/abs/2305.16291"
+[7]: https://github.com/QwenLM/Qwen3-ASR "https://github.com/QwenLM/Qwen3-ASR"
+[8]: https://github.com/hexgrad/kokoro "https://github.com/hexgrad/kokoro"
+

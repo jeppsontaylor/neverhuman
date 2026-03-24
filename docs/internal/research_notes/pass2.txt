@@ -1,0 +1,381 @@
+I went through v3 carefully, and the core problem is this:
+
+**you are still using one coarse timing rhythm to make three different decisions**:
+
+* “the user started talking”
+* “the user is definitely still talking”
+* “the user is truly done”
+
+Those should be three separate control loops.
+
+Right now the architecture is close, but a few things are still working against robustness:
+
+* `CHUNK_SZ = 2560` means the transport cadence is **160 ms**, so any interrupt logic that waits for multiple chunk-level hits is inherently slower than it feels like it should be.
+* The docs still disagree on barge-in behavior: one place says `BARGEIN_FRAMES = 2`, another describes `>= 3` consecutive detections.
+* The mind path is still not fully isolated in practice. Even in “remote” mode, `MINDD_LLM_URL` defaults to the same `8088` reflex LLM endpoint, so you can still get **compute contention even if Python locks look separate**.
+* `current_task` only wraps `_generate_and_speak()`, but a stale ASR stage can still block the next turn because ASR is serialized through `ThreadPoolExecutor(max_workers=1)`.
+
+So the best next version is not a cosmetic tweak. It is a **speech control plane redesign**.
+
+## The right model: three separate lanes
+
+Build the hot path around three distinct lanes:
+
+**1. Onset lane**
+Fast, aggressive, low-latency.
+Its only job is: “did fresh human speech just begin?”
+
+**2. Capture lane**
+Buffers the utterance, preserves preroll, keeps collecting audio across short pauses.
+
+**3. End-of-turn lane**
+Slow, conservative, rollback-capable.
+Its only job is: “are we finally safe to commit this utterance to ASR/LLM?”
+
+That is the cleanest fix for both symptoms at once.
+
+## The single most important change
+
+Move **fresh speech onset detection into the AudioWorklet** and let it stop playback locally before the server even reacts.
+
+That is the right place because AudioWorklet code runs in `AudioWorkletGlobalScope` on a **separate Web Audio rendering thread** and is specifically meant for **very low latency audio processing**, rather than waiting on the main thread. ([MDN Web Docs][1])
+
+So the flow should become:
+
+```text
+AudioWorklet subframes (20–30 ms)
+  -> onset detector fires
+  -> browser immediately stops playback locally
+  -> browser sends interrupt_hint JSON immediately
+  -> browser switches mic uplink into low-latency mode
+  -> server cancels everything and starts capturing the new utterance
+```
+
+That gives you the “snap back to reality” effect you want.
+
+## Best redesign for interruption
+
+### A. Add a true fast path
+
+Your `interrupt_hint` message already exists in the protocol. Make it the primary interrupt path whenever the assistant is in `thinking` or `speaking`.
+
+When the client sees probable new speech:
+
+* stop playback **immediately in the browser**
+* send `interrupt_hint`
+* flush a preroll buffer
+* switch upload cadence to 20–40 ms chunks until the utterance is committed
+
+Do **not** wait for server-side chunk accumulation before stopping audio.
+
+### B. Separate transport chunk size from analysis window
+
+Right now 160 ms chunks are too coarse for onset.
+
+Use **20 ms subframes** for analysis, even if you keep a larger transport packet sometimes. WebRTC-style VAD interfaces are built around exactly this kind of frame size: fixed **10, 20, or 30 ms** mono PCM frames at supported sample rates like 16 kHz. ([GitHub][2])
+
+You have two good implementation choices:
+
+**Best simple production choice:**
+just make the uplink chunk size **40 ms** or **20 ms** full-time.
+
+**Best optimized choice:**
+use adaptive transport:
+
+* idle listening: 80–160 ms
+* assistant speaking / thinking: 20–40 ms
+* after `interrupt_hint`: 20 ms until endpoint commit
+
+Given this is localhost and mono audio, the bandwidth is trivial. At 16 kHz mono:
+
+* 20 ms Float32 = 1,280 bytes
+* 20 ms PCM16 = 640 bytes
+
+So even 50 packets/sec is modest.
+
+### C. Use PCM16 on the uplink
+
+This is a high-value cleanup.
+
+Current uplink is Float32 PCM. For smaller chunking, switch browser → server uplink to **16-bit PCM** and convert to float32 server-side.
+
+That cuts bandwidth and allocation pressure in half, and makes 20–40 ms chunking even cheaper.
+
+## Best redesign for “recordings end too quickly”
+
+The current system is still acting too much like **end-of-phrase** equals **end-of-turn**.
+
+That is the wrong mental model.
+
+You want **speech islands** connected by tolerated pauses.
+
+### Replace fixed silence-end with a real endpointer
+
+Use a state machine like this:
+
+```text
+IDLE
+  -> onset confirmed -> IN_SPEECH
+
+IN_SPEECH
+  -> silence exceeds dynamic_hang -> MAYBE_DONE
+
+MAYBE_DONE
+  -> speech resumes -> back to IN_SPEECH
+  -> grace window expires with no speech -> COMMIT
+
+COMMIT
+  -> send utterance to ASR
+```
+
+### Use hysteresis, not one threshold
+
+For example:
+
+```python
+START_THRESHOLD = 0.78   # aggressive onset
+KEEP_THRESHOLD  = 0.45   # easier to stay in speech once active
+END_THRESHOLD   = 0.35   # conservative silence
+GRACE_MS        = 200
+```
+
+Then:
+
+* start speech on 2 of last 3 subframes above `START_THRESHOLD`
+* remain in speech while above `KEEP_THRESHOLD`
+* enter `MAYBE_DONE` only after silence exceeds `hang_ms`
+* finalize only after `GRACE_MS` passes with no renewed speech
+
+That extra rollback window is the simplest fix for premature cutoffs.
+
+### Make hang time dynamic
+
+A fixed `_SILENCE_HANG_SEC = 0.55` is too blunt.
+
+Use something like:
+
+```python
+hang_ms = 650
+
+if total_speech_ms < 1200:
+    hang_ms += 200   # early pauses are common in short utterances
+
+if had_pause_resume_recently:
+    hang_ms += 150   # user is speaking in clauses
+
+if current_capture_started_as_bargein:
+    hang_ms += 100   # interrupted speech often starts with "wait..." and continues
+
+hang_ms = clamp(hang_ms, 650, 1100)
+```
+
+That preserves responsiveness while being much more conservative about ending the recording.
+
+## The other major fix: absolute preemption
+
+Right now the voice path can still end up behind other work.
+
+That has to stop.
+
+### Production rule
+
+**In production, the mind must never use the reflex 35B endpoint.**
+
+Right now `MINDD_LLM_URL` defaults to `http://localhost:8088/v1/chat/completions`, which means the “remote sidecar” can still contend with the reflex model.
+
+So make this rule hard:
+
+* if `JARVIS_MIND_REMOTE=1` and `MINDD_LLM_URL == LLM_URL`, log a hard error and disable mind pulses
+* embedded mind mode becomes dev-only
+* production mind uses a separate small sidecar model or stays off
+
+Otherwise `llm_gate` only hides part of the contention.
+
+### Voice must preempt the entire turn, not only generation
+
+Today `current_task` wraps `_generate_and_speak()`. That is not enough.
+
+You need one umbrella task per active turn:
+
+```python
+current_turn_task = ASR -> filler -> LLM -> TTS
+```
+
+On fresh speech onset:
+
+* increment `generation_id`
+* set `interrupt_event`
+* set `mind_interrupt`
+* cancel `current_turn_task`
+* cancel filler audio
+* flush parallel TTS queue
+* send `stop_audio`
+* mark state as `capturing`
+
+Everything from the old generation becomes stale.
+
+### Add generation IDs everywhere
+
+This is a big reliability win.
+
+Tag these with `generation_id`:
+
+* outbound tokens
+* filler audio
+* synthesized TTS WAVs
+* `typing`
+* `done`
+* browser playback queue
+
+Then the browser drops anything whose `generation_id` is not current.
+
+That solves ghost audio, stale tokens after cancel, and delayed TTS spillover.
+
+## The best “abort all” routine
+
+Create one shared helper:
+
+```python
+async def abort_all(reason: str):
+    session.generation_id += 1
+    interrupt_event.set()
+    mind_interrupt.set()
+
+    if current_turn_task and not current_turn_task.done():
+        current_turn_task.cancel()
+
+    parallel_tts.cancel_before(session.generation_id)
+    filler_audio.cancel_before(session.generation_id)
+
+    await _safe_send_json(ws, {
+        "type": "stop_audio",
+        "reason": reason,
+        "generation_id": session.generation_id,
+    })
+
+    state = "capturing"
+```
+
+And call that from:
+
+* `interrupt_hint`
+* manual `interrupt`
+* voice barge-in
+* any new onset while assistant is `thinking` or `speaking`
+
+One routine. One outcome. No split behavior.
+
+## Optional second-opinion detector
+
+Your current pure numpy spectral + RMS detector is fine as the first line.
+
+But if you want a second-opinion detector for endpoint confirmation, the runtime budget is there. Silero documents that a **30+ ms** chunk takes **under 1 ms** on a single CPU thread, supports **8 kHz and 16 kHz**, and ONNX can be even faster in some cases. ([GitHub][3])
+
+So a very strong setup would be:
+
+* **client/worklet:** fast onset detector
+* **server:** current spectral+RMS endpointer
+* **optional confirmation:** Silero or WebRTC-style VAD on 20–30 ms windows before endpoint commit
+
+I would not make the hot path depend on a second model, but I would allow it as a confirmation layer for the “am I really done?” decision.
+
+## The best temporary hotfixes
+
+Before a full redesign, these four changes will noticeably improve behavior fast:
+
+**1. Wire `interrupt_hint` for real**
+
+* local playback stop first
+* server cancel second
+
+**2. Lower uplink chunk size**
+
+* move from 160 ms to 40 ms immediately
+* 20 ms if you want maximum aggressiveness
+
+**3. Increase endpoint conservatism now**
+
+* raise base silence hang from 550 ms to 750 ms
+* add a 200 ms grace window before commit
+
+**4. Force mind isolation**
+
+* production defaults to remote sidecar only
+* if sidecar still points at `8088`, disable mind instead of competing with voice
+
+## The best full plan
+
+### P0 — immediate reliability patch
+
+Do this first.
+
+* Make `interrupt_hint` functional end to end
+* Add local browser playback stop on onset
+* Reduce uplink chunk size to 40 ms
+* Increase silence hang + add grace window
+* Add `generation_id` to tokens/audio
+* Make mind sidecar mandatory in production, or disable mind
+* Replace 3×2 s `llm_gate` behavior with a very short total cap in any fallback mode
+
+### P1 — speech arbiter refactor
+
+Then build the real hot path.
+
+* new `SpeechArbiter` module
+* separate onset / capture / commit states
+* preroll buffer of 300–500 ms
+* adaptive hang time
+* adaptive chunk size or fixed 20 ms
+* umbrella `current_turn_task`
+
+### P2 — hard preemption of ASR
+
+This is the next real robustness frontier.
+
+Because ASR is serialized with `max_workers=1`, a stale ASR can still delay the next utterance even if you cancel everything else.
+
+So long term:
+
+* move ASR to its own worker process
+* make stale inference droppable or killable
+* keep only the latest pending utterance after interruption
+
+That is how you get truly ruthless preemption.
+
+## Update the metrics too
+
+Your current latency targets mix two different goals.
+
+Split them:
+
+* **speech onset → local playback stop**
+* **speech onset → server cancel complete**
+* **true speech end → endpoint commit**
+* **endpoint commit → filler audio**
+* **endpoint commit → first semantic audio**
+
+That will make tuning honest.
+
+Right now “speech-end → first audio <400 ms” conflicts with “be very sure the user is done” unless you allow very aggressive endpointing.
+
+## My strongest recommendations, in one line each
+
+* **Do not use 160 ms transport cadence for interrupt decisions.**
+* **Do detect onset in the AudioWorklet, not only on the server.** ([MDN Web Docs][1])
+* **Do treat endpointing as a rollback-capable commit decision, not a one-shot silence timer.**
+* **Do make mind truly separate from the reflex model, not just separate in Python.**
+* **Do tag every token/audio packet with generation IDs.**
+* **Do treat ASR as part of the cancellable turn, not outside it.**
+
+The cleanest summary is this:
+
+**Interrupt should be fast and aggressive.
+Endpoint should be slow and conservative.
+Those are different jobs, and your architecture should treat them that way.**
+
+The next best step is for me to turn this into a concrete **v3.1 patch plan** with exact state machines, parameter defaults, and code-level module boundaries.
+
+[1]: https://developer.mozilla.org/en-US/docs/Web/API/AudioWorklet "AudioWorklet - Web APIs | MDN"
+[2]: https://github.com/serenadeai/webrtcvad/blob/master/README.md "webrtcvad/README.md at master · serenadeai/webrtcvad · GitHub"
+[3]: https://github.com/snakers4/silero-vad "GitHub - snakers4/silero-vad: Silero VAD: pre-trained enterprise-grade Voice Activity Detector · GitHub"
+

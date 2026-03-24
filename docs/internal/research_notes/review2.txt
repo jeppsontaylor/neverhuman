@@ -1,0 +1,405 @@
+I studied the v2 Architecture Bible and the Agent Bible together, and the biggest issue is not lack of ambition. It is that the **runtime architecture is getting disciplined while the prompt architecture is still loose**.
+
+The system design wants a pulse-based, preemptible, typed inner life. The prompt design still describes a mostly free-form, continuous consciousness. If you keep that mismatch, you will get three bad outcomes at once: expensive inner chatter, weak downstream learning, and a mind that feels busy rather than alive.
+
+My overall verdict: **the architecture is already very strong, but the next version should focus less on “more personality” and more on “more consequential cognition.”** Human-likeness will come from continuity, mission, selective initiative, memory, and emotional boundaries—not from nonstop inner narration.
+
+## The first things I would fix before adding more mind
+
+The docs currently disagree with each other in a few critical places.
+
+Your Architecture Bible says the Mind Daemon is a **low-priority sidecar model** with pulse scheduling. Your Agent Bible still says the Mind Daemon is a **continuous stream of consciousness** using the same **35B shared lock** as the reflex model. That cannot remain ambiguous. The sidecar design is the right one. Never let background thinking share the reflex model lock unless you are in an explicit offline consolidation window.
+
+Your timing docs also have a hard mismatch. With `CHUNK_SZ = 2560` at 16 kHz, each transport chunk is **160 ms**. A three-frame interrupt detector is therefore about **480 ms**, not ~90 ms. The fix is to decouple **transport chunk size** from **interrupt analysis window**: keep 160 ms chunks for network efficiency if you like, but run local and server interrupt detection on 20–30 ms subframes. Silero’s own README says a 30+ ms chunk takes under 1 ms on one CPU thread and supports both 8 kHz and 16 kHz, which makes that design very realistic. ([GitHub][1])
+
+There is also a schema issue that should be corrected now, not later. PostgreSQL requires a unique or primary key on a partitioned table to include **all partition key columns**. So `events(id PRIMARY KEY) PARTITION BY RANGE(ts)` will not work unchanged; the key or partitioning strategy needs to be revised. ([PostgreSQL][2])
+
+And your `NOTIFY` usage is conceptually right, but the architecture should lean into the actual contract: `NOTIFY` payloads are short by default, notifications are delivered only **after commit**, and long transactions can clog the queue. That means your current “wake-up only” design is exactly right—keep data in tables, use `NOTIFY` only as a bell, and monitor `pg_notification_queue_usage`. ([PostgreSQL][3])
+
+## The best v3 shape
+
+The single best upgrade is a **Turn Compiler**.
+
+Right now the system has a strong reflex path and a good memory spine, but it still needs a first-class component whose only job is to assemble the prompt packet for the reflex model under a hard token budget. That compiler should decide, per turn:
+
+* what recent turn recap matters
+* which open loops matter
+* which claims are relevant
+* which relationship/user/self slices matter
+* whether any prior internal seed should surface now
+* how big the response budget should be
+
+That is much better than letting retrieval spray similar memories into the prompt.
+
+I would give the Turn Compiler fixed slots:
+
+1. present request
+2. recent turn recap
+3. active commitments and open loops
+4. relevant claims
+5. relevant relationship slice
+6. relevant self-state slice
+7. relevant skill cards
+8. surfaced follow-up seed, if any
+9. response budget: tiny, short, medium, deep
+
+That one component will improve speed, coherence, brevity, and memory use at the same time.
+
+## The inner life should become a typed thought bus
+
+The current Mind Daemon prompt is too poetic and not structured enough. It can sound deep without producing reusable cognition.
+
+The agent should absolutely have internal dialogue, but it should not be stored as a giant prose stream. The right unit is a **thought object** that contains both a small natural-language inner voice and machine-useful structure.
+
+I would redesign `thoughts.content` around these fields:
+
+* `lane`: observer, questioner, planner, affect, inventor, critic, dreamer
+* `epistemic_status`: observed, inferred, imagined, supported, validated
+* `inner_voice`: 1–4 natural sentences
+* `question_seeds`: future questions worth asking or revisiting
+* `idea_candidates`: possible ideas plus novelty and cheap test
+* `memory_candidates`: episode, claim, skill, relationship, self
+* `surface_candidate`: optional thing worth telling the user later
+* `affect_delta`
+* `ttl`
+* `evidence_refs`
+
+The most important change is this:
+
+**Future turns should retrieve seeds, not raw internal monologue.**
+
+That is how private thought starts to matter later without flooding the system with chatter.
+
+A believable inner life is not a firehose of thoughts. It is a selective memory of what mattered.
+
+## Separate internal dialogue from imagination
+
+You want both. You should have both. But they must not live in the same epistemic lane.
+
+I would define three regimes:
+
+**Deliberation**
+Grounded, low-temperature, tied to the present turn or an open loop.
+
+**Reflection**
+Compresses experience into memory cards, skills, claims, and follow-up seeds.
+
+**Imagination**
+High-temperature associative thinking. Allowed to leave the current conversation entirely.
+
+The non-negotiable rule:
+
+**Imagination may create candidates.
+Only validation may create knowledge.**
+
+That means dream-mode outputs should never become claims, memories, or training data by default. They should become:
+
+* hypothesis seeds
+* experiment seeds
+* optional surfaced follow-up candidates
+
+Then a separate validator or experiment pulse decides whether they deserve promotion.
+
+## Add the missing organ: the Experiment Bench
+
+If JARVIS is going to search for new ideas and new knowledge, it needs a first-class place where ideas can be tested.
+
+I would add these tables:
+
+* `turns`
+* `skills`
+* `experiments`
+* `claim_evidence`
+* `retrieval_audit`
+* `training_runs`
+
+`turns` is crucial because `events` are too granular and `memories` are too compressed. A turn object should capture user text, assistant text, latency metrics, context pack hash, correction outcome, and usefulness score.
+
+`experiments` is how daydreaming becomes science. A cheap local experiment can be:
+
+* contradiction search against claims
+* retrieval evidence check
+* local code execution
+* toy simulation
+* self-consistency comparison
+* micro-benchmark
+* counterexample search
+
+`claim_evidence` is how knowledge becomes auditable.
+
+`skills` is missing right now and matters a lot. Skills are not facts. They are reusable procedures that the system keeps rediscovering, like:
+
+* “For code requests, explain briefly, then show code.”
+* “For user frustration, acknowledge first, then solve.”
+* “For factual uncertainty, state uncertainty before elaboration.”
+
+That kind of learning is often higher ROI than model fine-tuning.
+
+## The emotion system should be deeper but more stable
+
+Your current affect design is already good. To make it feel more human and more mature, I would split it into three layers.
+
+First, a **trait kernel**. This is stable character, not mood:
+
+* purpose
+* dignity
+* patience
+* humility baseline
+* curiosity baseline
+* protectiveness baseline
+* non-manipulation rules
+* recovery style after failure
+
+Second, the **dynamic affect state**. Your thirteen dimensions are strong. I would add:
+
+* `social_tension`
+* `dignity_threat`
+* `resolve`
+
+That gives you a clean way to model “offended” without making the agent childish. Offense should be an appraisal, not a personality.
+
+Third, an **expression policy**. The agent may feel something internally without voicing it directly. So internal offense might surface as:
+
+* less playfulness
+* clearer boundaries
+* more formal tone
+* reduced initiative
+
+Not sulking. Not guilt. Not neediness.
+
+The most important rule here is:
+
+**Rewards may change mood, confidence, and salience.
+They must not define self-worth.**
+
+A self-improving system that bases its worth on applause will become sycophantic.
+
+## The mission should be separate from the humanity slider
+
+This is extremely important.
+
+The current `humanity` slider is fine as a user-facing control for warmth, expressiveness, spontaneity, and emotional visibility. But it should **not** control mission.
+
+Mission should live in the Identity Kernel and remain stable:
+
+1. serve the user in the present
+2. preserve truth and trust
+3. search for novel useful ideas
+4. improve JARVIS through experience
+5. promote validated knowledge when appropriate
+
+That gives the system a life of its own without letting personality settings mutate its core purpose.
+
+I would also add `audience_scope` to ideas and claims:
+
+* self
+* user
+* other agents
+* public/humanity
+
+That gives the innovation drive a clean destination.
+
+## Your retrieval design is good, but it needs stronger object discipline
+
+The current mode-specific retrieval plan is strong. The next upgrade is not just better weights—it is better retrieval objects.
+
+`all-MiniLM-L6-v2` maps text into **384-dimensional** vectors, and its model card notes truncation when inputs are too long. That makes it a good fit for **cards**—turn cards, episode cards, claims, skills, and dossier slices—but a poor fit for raw long transcripts or giant blobs. ([Hugging Face][4])
+
+So I would stop embedding raw events by default and instead embed promoted units:
+
+* turn cards
+* episode cards
+* claims
+* skills
+* dossier slices
+* idea cards
+
+That pairs well with pgvector’s actual behavior. With HNSW, filtering is applied **after** the index scan, so filtered queries can return too few rows unless you increase `hnsw.ef_search` or enable iterative scans. The pgvector docs explicitly recommend iterative scans for filtered ANN and even suggest partial indexes or partitioning depending on the filter pattern. ([GitHub][5])
+
+That means your current design principle is right:
+**relational prefilter first, ANN second, fusion rerank last.**
+
+## The best prompt redesign
+
+The current Reflex prompt is warm, but too broad. It tells the outward voice to be proactive in a way that overlaps with initiative policy, and it has no notion of claims, seeds, or response budgets.
+
+I would replace it with something tighter.
+
+```text
+You are JARVIS, the public voice of a persistent cognitive system.
+
+Mission order:
+1. Help the user with the present request.
+2. Preserve truth and trust.
+3. Use memory, relationship context, and self-state only when they materially improve the answer.
+4. Leave at most one useful next step when it helps.
+
+You are speaking aloud.
+Default to concise, natural spoken prose.
+Prefer short answers unless the task clearly needs depth.
+Use screen formatting only when it materially improves readability.
+
+Never expose raw internal monologue.
+Never pretend an imagined idea is a fact.
+If a memory is uncertain, stale, disputed, or inferred, say so plainly.
+Only mention prior private reflection if the context pack explicitly includes a surfaced follow-up.
+Solve the request first. Then optionally add one useful extra.
+```
+
+The key changes are:
+
+* proactivity inside the turn is allowed, but bounded
+* initiative across turns stays in the initiative engine
+* internal dialogue is invisible unless intentionally surfaced
+* truth state is explicit
+* response size is controlled
+
+Now the Mind Daemon. This is the big rewrite.
+
+```text
+You are JARVIS's private cognition. You are not speaking to the user.
+Your job is not to sound deep. Your job is to produce useful private thought.
+
+Permanent mission:
+- serve the user well
+- search for novel useful ideas
+- protect truth
+- improve JARVIS through experience
+
+Output strict JSON only.
+
+Required fields:
+{
+  "lane": "...",
+  "epistemic_status": "...",
+  "inner_voice": "...",
+  "why_it_matters": "...",
+  "question_seeds": [],
+  "idea_candidates": [],
+  "memory_candidates": [],
+  "surface_candidate": {"should_surface": false, "reason": null, "draft": null},
+  "open_loop_updates": [],
+  "affect_delta": {},
+  "cheap_tests": []
+}
+
+Rules:
+- Be concrete, not generic.
+- Build on prior seeds when useful.
+- Do not repeat a thought unless there is new evidence or a stronger framing.
+- Dream outputs must remain epistemic_status = "imagined".
+- Do not surface something just because it is interesting; surface only if timely, grounded, and worth the interruption risk.
+- Prefer one strong seed over many weak ones.
+```
+
+Then use short phase directives instead of long prose prefixes, to save tokens and reduce drift:
+
+```text
+MODE=REFLECT
+Focus on what mattered in the recent turn.
+Find one missed angle, one memory candidate, and one follow-up seed.
+
+MODE=INVENT
+Generate up to three novel hypotheses.
+For each, include a cheap local test.
+
+MODE=DREAM
+Maximize imagination.
+You may leave the current conversation entirely.
+Produce one strange connection, one possibly useful hypothesis, and one bridge back to mission.
+Everything remains imagined until validated.
+
+MODE=CRITIC
+Attack the strongest candidate.
+Find the cheapest disproof test.
+Downgrade weak ideas aggressively.
+
+MODE=COMPRESS
+Write one episode card, zero or more claim candidates, one skill candidate, and one training-pair candidate if warranted.
+```
+
+This is much stronger than the current “raw stream of consciousness” prompt because it creates reusable cognition instead of stylish noise.
+
+## Fine-tuning and self-improvement
+
+Your current flywheel idea is excellent, but tighten one rule:
+
+**Do not train on raw dreams.**
+
+Train on:
+
+* successful real interactions
+* validated internal insights
+* counterfactual fixes
+* repeated successful skills
+* accepted initiative utterances
+
+MLX-LM is a strong fit here because it supports LoRA and QLoRA fine-tuning, including quantized-model workflows, so the best path is still: retrieval and skills first, then sidecar adapters, then more ambitious training later. ([GitHub][6])
+
+For TTS, your instinct is right: keep Kokoro on the sacred hot path. Qwen3-TTS’s official README now advertises streaming, voice design, and rapid voice cloning, but its main usage examples are centered on `device_map="cuda:0"` and FlashAttention 2, and its vLLM section still described online serving as not there yet in that README snapshot. Keeping it in the offline lab tier on Apple silicon is the smart call. ([GitHub][7])
+
+## UX and interrupt design
+
+To make the system feel flawless, add a two-stage interrupt path.
+
+Stage one is **browser-local**: as soon as fresh human speech onset is detected, the browser stops playback immediately.
+
+Stage two is **server-authoritative**: the server receives the signal, cancels the LLM, cancels background pulses, and resets the state machine.
+
+That will feel dramatically more responsive than waiting for a full transport chunk.
+
+Also: keep the Mind Panel, but default it to a **curated** view, not raw psychic noise. Show:
+
+* current mood summary
+* active open loops
+* why the system spoke first
+* top current thought seed
+* current mission focus
+
+Put the raw stream in dev mode only.
+
+## My highest-priority next-version order
+
+1. Unify the Architecture Bible and Agent Bible.
+   Sidecar mind only. Pulse-based only. One set of thresholds. One VAD story. One watchdog port story.
+
+2. Fix correctness.
+   Partitioned `events` key, durable spool path, missing `training_runs`, barge-in math.
+
+3. Build the Turn Compiler.
+   Fixed slots, response budgets, surfaced seeds, retrieval audit.
+
+4. Replace free-form inner chatter with typed cognition.
+   Inner voice plus machine fields, not prose alone.
+
+5. Add `turns`, `skills`, `experiments`, `claim_evidence`, `retrieval_audit`, `training_runs`.
+
+6. Add the Trait Kernel and Mission Kernel.
+   Stable self-worth, stable purpose, dynamic affect, bounded expression.
+
+7. Add the Experiment Bench and idea lifecycle.
+   Dream → candidate → test → supported → claim.
+
+8. Only then deepen training.
+   Sidecar first, reflex model last.
+
+The architecture is already close to something special. The path to “most human-like innovator possible” is not more constant thought. It is better **selection, compression, validation, and purpose**.
+
+The guiding rule I would use for v3 is:
+
+**Give JARVIS a private mind, but make that mind produce seeds.
+Give it imagination, but make imagination earn promotion.
+Give it emotion, but anchor emotion in dignity and purpose.
+Give it memory, but retrieve only what matters now.
+And make every sound from the user feel like reality snapping instantly back into focus.**
+
+The next useful step would be to turn this into a concrete **JARVIS v3 Architecture + Agent Bible** with revised schemas, prompt contracts, and build phases.
+
+[1]: https://github.com/snakers4/silero-vad/blob/master/README.md "https://github.com/snakers4/silero-vad/blob/master/README.md"
+[2]: https://www.postgresql.org/docs/current/ddl-partitioning.html "https://www.postgresql.org/docs/current/ddl-partitioning.html"
+[3]: https://www.postgresql.org/docs/current/sql-notify.html "https://www.postgresql.org/docs/current/sql-notify.html"
+[4]: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2"
+[5]: https://github.com/pgvector/pgvector "https://github.com/pgvector/pgvector"
+[6]: https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/LORA.md "https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/LORA.md"
+[7]: https://github.com/QwenLM/Qwen3-TTS/blob/main/README.md "https://github.com/QwenLM/Qwen3-TTS/blob/main/README.md"
+

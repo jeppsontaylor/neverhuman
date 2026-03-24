@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NeverHuman · Setup</title>
+<meta name="description" content="First-run setup for GARY — download ASR, TTS and LLM models.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* ── Reset & base ─────────────────────────────────────────────────── */
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg-deep:#06080f;
+  --bg-card:rgba(255,255,255,0.04);
+  --bg-card-hover:rgba(255,255,255,0.07);
+  --border:rgba(255,255,255,0.08);
+  --border-glow:rgba(99,179,237,0.35);
+  --accent:#63b3ed;
+  --accent2:#9b72f5;
+  --accent-grad:linear-gradient(135deg,#9b72f5,#63b3ed);
+  --ok:#34d399;
+  --warn:#f59e0b;
+  --danger:#f87171;
+  --text:#e2e8f0;
+  --muted:#94a3b8;
+  --dim:#475569;
+}
+body{
+  font-family:'Inter',system-ui,sans-serif;
+  background:var(--bg-deep);
+  color:var(--text);
+  min-height:100vh;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:flex-start;
+  padding:40px 20px 80px;
+  background-image:
+    radial-gradient(ellipse 60% 40% at 20% 10%,rgba(99,74,245,0.12) 0%,transparent 70%),
+    radial-gradient(ellipse 50% 40% at 80% 80%,rgba(56,190,237,0.1) 0%,transparent 70%);
+}
+
+/* ── Header ───────────────────────────────────────────────────────── */
+.hero{text-align:center;margin-bottom:48px}
+.hero-badge{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:6px 14px;border-radius:20px;
+  background:rgba(99,179,237,0.08);
+  border:1px solid rgba(99,179,237,0.2);
+  font-size:11px;font-weight:600;letter-spacing:0.1em;
+  text-transform:uppercase;color:var(--accent);
+  margin-bottom:20px;
+}
+.hero-badge::before{
+  content:'';width:7px;height:7px;border-radius:50%;
+  background:var(--ok);
+  box-shadow:0 0 8px var(--ok);
+  animation:pulse 2s ease-in-out infinite;
+}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+.hero h1{
+  font-size:clamp(28px,5vw,48px);font-weight:700;
+  background:var(--accent-grad);-webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  letter-spacing:-0.02em;margin-bottom:10px;
+}
+.hero p{font-size:16px;color:var(--muted);max-width:480px;margin:0 auto;line-height:1.6}
+
+/* ── Step layout ──────────────────────────────────────────────────── */
+.steps{width:100%;max-width:680px;display:flex;flex-direction:column;gap:16px}
+
+/* ── Card ─────────────────────────────────────────────────────────── */
+.card{
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:16px;
+  padding:24px 28px;
+  transition:border-color 0.3s,box-shadow 0.3s;
+  position:relative;overflow:hidden;
+}
+.card::before{
+  content:'';position:absolute;inset:0;border-radius:16px;
+  background:var(--accent-grad);opacity:0;transition:opacity 0.3s;pointer-events:none;
+}
+.card.active{border-color:var(--border-glow);box-shadow:0 0 24px rgba(99,179,237,0.08)}
+.card.done{border-color:rgba(52,211,153,0.3)}
+.card.locked{opacity:0.5}
+
+.card-header{display:flex;align-items:center;gap:14px;margin-bottom:16px}
+.card-icon{
+  width:44px;height:44px;border-radius:12px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:22px;background:rgba(255,255,255,0.06);
+  border:1px solid var(--border);flex-shrink:0;
+}
+.card.done .card-icon{background:rgba(52,211,153,0.1);border-color:rgba(52,211,153,0.3)}
+.card-text{flex:1}
+.card-title{font-size:16px;font-weight:600;display:flex;align-items:center;gap:8px}
+.card-sub{font-size:13px;color:var(--muted);margin-top:3px}
+.status-pill{
+  font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;
+  padding:3px 10px;border-radius:10px;
+}
+.pill-ok{background:rgba(52,211,153,0.15);color:var(--ok)}
+.pill-ready{background:rgba(99,179,237,0.15);color:var(--accent)}
+.pill-locked{background:rgba(71,85,105,0.3);color:var(--dim)}
+.pill-downloading{background:rgba(245,158,11,0.15);color:var(--warn)}
+
+/* ── Model selector ───────────────────────────────────────────────── */
+.model-select{
+  width:100%;background:rgba(0,0,0,0.3);
+  border:1px solid var(--border);border-radius:10px;
+  padding:10px 14px;color:var(--text);
+  font-family:inherit;font-size:14px;margin-bottom:14px;
+  appearance:none;cursor:pointer;
+}
+.model-select:focus{outline:none;border-color:var(--border-glow)}
+.model-info{
+  font-size:12px;color:var(--muted);
+  font-family:'JetBrains Mono',monospace;
+  background:rgba(0,0,0,0.2);border-radius:8px;padding:8px 12px;
+  margin-bottom:14px;display:flex;gap:16px;flex-wrap:wrap;
+}
+.model-info span{display:flex;align-items:center;gap:5px}
+
+/* ── Flash-moe notice ─────────────────────────────────────────────── */
+.engine-notice{
+  background:rgba(245,158,11,0.08);
+  border:1px solid rgba(245,158,11,0.2);
+  border-radius:10px;padding:12px 16px;
+  font-size:13px;color:var(--warn);
+  margin-bottom:14px;line-height:1.5;
+  display:none;
+}
+.engine-notice code{
+  font-family:'JetBrains Mono',monospace;
+  background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:4px;
+  font-size:11px;
+}
+
+/* ── Download button ──────────────────────────────────────────────── */
+.btn{
+  display:inline-flex;align-items:center;gap:8px;
+  padding:11px 24px;border-radius:10px;
+  font-family:inherit;font-size:14px;font-weight:600;
+  cursor:pointer;border:none;transition:all 0.25s;
+  color:#fff;
+}
+.btn-primary{background:var(--accent-grad)}
+.btn-primary:hover{transform:translateY(-1px);box-shadow:0 6px 24px rgba(99,179,237,0.3)}
+.btn-primary:active{transform:translateY(0)}
+.btn-primary:disabled{opacity:0.4;cursor:not-allowed;transform:none}
+.btn-sm{padding:7px 16px;font-size:13px}
+
+/* ── HF token ─────────────────────────────────────────────────────── */
+.token-row{display:flex;gap:8px;margin-bottom:14px;align-items:center}
+.token-input{
+  flex:1;background:rgba(0,0,0,0.3);
+  border:1px solid var(--border);border-radius:10px;
+  padding:9px 14px;color:var(--text);font-family:'JetBrains Mono',monospace;
+  font-size:13px;
+}
+.token-input:focus{outline:none;border-color:var(--border-glow)}
+.token-toggle{font-size:11px;color:var(--muted);cursor:pointer;white-space:nowrap;padding:7px 12px}
+
+/* ── Progress bar ─────────────────────────────────────────────────── */
+.progress-wrap{margin-top:14px}
+.progress-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.progress-label{font-size:12px;color:var(--muted)}
+.progress-stats{font-size:11px;color:var(--dim);font-family:'JetBrains Mono',monospace}
+.progress-track{
+  width:100%;height:6px;background:rgba(255,255,255,0.06);
+  border-radius:3px;overflow:hidden;
+}
+.progress-bar{
+  height:100%;border-radius:3px;
+  background:var(--accent-grad);
+  width:0%;transition:width 0.4s ease;
+}
+.progress-bar.indeterminate{
+  width:30%;
+  background:var(--accent-grad);
+  animation:slide 1.5s ease-in-out infinite;
+}
+@keyframes slide{
+  0%{transform:translateX(-100%)}
+  100%{transform:translateX(400%)}
+}
+.progress-msg{font-size:12px;color:var(--muted);margin-top:6px;min-height:16px}
+
+/* ── Launch section ───────────────────────────────────────────────── */
+.launch-box{
+  width:100%;max-width:680px;
+  margin-top:24px;text-align:center;
+  background:rgba(52,211,153,0.05);
+  border:1px solid rgba(52,211,153,0.2);
+  border-radius:16px;padding:28px 32px;
+  display:none;
+}
+.launch-box h2{font-size:22px;font-weight:700;margin-bottom:8px;color:var(--ok)}
+.launch-box p{font-size:14px;color:var(--muted);margin-bottom:20px}
+.btn-launch{
+  padding:14px 36px;border-radius:12px;
+  font-family:inherit;font-size:16px;font-weight:700;
+  cursor:pointer;border:none;color:#fff;
+  background:linear-gradient(135deg,var(--ok),#059669);
+  transition:all 0.25s;
+}
+.btn-launch:hover{transform:translateY(-2px);box-shadow:0 8px 32px rgba(52,211,153,0.3)}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <img src="/static/img/gary_man.png" alt="GARY" style="max-height:260px;margin-bottom:28px;border-radius:18px;box-shadow:0 0 60px rgba(99,179,237,0.18),0 0 120px rgba(155,114,245,0.10);filter:drop-shadow(0 4px 24px rgba(0,0,0,0.5));" />
+  <div class="hero-badge">NeverHuman Setup</div>
+  <h1>Wake up, GARY</h1>
+  <p>Download the three components that give GARY ears, a voice, and a brain. This only runs once.</p>
+</div>
+
+<div class="steps" id="steps">
+
+  <!-- ── Step 1: ASR ─────────────────────────────────────────────── -->
+  <div class="card" id="card-asr">
+    <div class="card-header">
+      <div class="card-icon">🎤</div>
+      <div class="card-text">
+        <div class="card-title">
+          Give GARY Ears
+          <span class="status-pill pill-locked" id="pill-asr">Checking…</span>
+        </div>
+        <div class="card-sub" id="sub-asr">Automatic speech recognition</div>
+      </div>
+    </div>
+    <select class="model-select" id="sel-asr"></select>
+    <div class="model-info" id="info-asr">
+      <span>Loading…</span>
+    </div>
+    <div class="engine-notice" id="notice-asr"></div>
+    <div class="token-row" id="token-row-asr" style="display:none">
+      <input class="token-input" id="hf-token-asr" type="password" placeholder="hf_…">
+      <span class="token-toggle" onclick="toggleToken('asr')">Show</span>
+    </div>
+    <button class="btn btn-primary btn-sm" id="btn-asr" onclick="startDownload('asr')">Download</button>
+    <div class="progress-wrap" id="prog-asr" style="display:none">
+      <div class="progress-row">
+        <span class="progress-label" id="prog-label-asr">Downloading…</span>
+        <span class="progress-stats" id="prog-stats-asr"></span>
+      </div>
+      <div class="progress-track"><div class="progress-bar" id="prog-bar-asr"></div></div>
+      <div class="progress-msg" id="prog-msg-asr"></div>
+    </div>
+  </div>
+
+  <!-- ── Step 2: TTS ─────────────────────────────────────────────── -->
+  <div class="card" id="card-tts">
+    <div class="card-header">
+      <div class="card-icon">🔊</div>
+      <div class="card-text">
+        <div class="card-title">
+          Give GARY a Voice
+          <span class="status-pill pill-locked" id="pill-tts">Checking…</span>
+        </div>
+        <div class="card-sub" id="sub-tts">Text-to-speech synthesis</div>
+      </div>
+    </div>
+    <select class="model-select" id="sel-tts"></select>
+    <div class="model-info" id="info-tts"><span>Loading…</span></div>
+    <div class="engine-notice" id="notice-tts"></div>
+    <div class="token-row" id="token-row-tts" style="display:none">
+      <input class="token-input" id="hf-token-tts" type="password" placeholder="hf_…">
+      <span class="token-toggle" onclick="toggleToken('tts')">Show</span>
+    </div>
+    <button class="btn btn-primary btn-sm" id="btn-tts" onclick="startDownload('tts')">Download</button>
+    <div class="progress-wrap" id="prog-tts" style="display:none">
+      <div class="progress-row">
+        <span class="progress-label" id="prog-label-tts">Downloading…</span>
+        <span class="progress-stats" id="prog-stats-tts"></span>
+      </div>
+      <div class="progress-track"><div class="progress-bar" id="prog-bar-tts"></div></div>
+      <div class="progress-msg" id="prog-msg-tts"></div>
+    </div>
+  </div>
+
+  <!-- ── Step 3: LLM ─────────────────────────────────────────────── -->
+  <div class="card" id="card-llm">
+    <div class="card-header">
+      <div class="card-icon">🧠</div>
+      <div class="card-text">
+        <div class="card-title">
+          Give GARY a Brain
+          <span class="status-pill pill-locked" id="pill-llm">Checking…</span>
+        </div>
+        <div class="card-sub" id="sub-llm">Large language model weights</div>
+      </div>
+    </div>
+    <!-- Engine check notice -->
+    <div class="engine-notice" id="engine-warn">
+      ⚠️ The flash-moe inference engine was not found. Run
+      <code>./install.sh</code> in the repo root first — it compiles
+      the engine and places it at <code>~/.neverhuman/flash-moe/infer</code>.
+    </div>
+    <select class="model-select" id="sel-llm"></select>
+    <div class="model-info" id="info-llm"><span>Loading…</span></div>
+    <div class="engine-notice" id="notice-llm"></div>
+    <div class="token-row" id="token-row-llm" style="display:none">
+      <input class="token-input" id="hf-token-llm" type="password" placeholder="hf_…">
+      <span class="token-toggle" onclick="toggleToken('llm')">Show</span>
+    </div>
+    <button class="btn btn-primary btn-sm" id="btn-llm" onclick="startDownload('llm')">Download</button>
+    <div class="progress-wrap" id="prog-llm" style="display:none">
+      <div class="progress-row">
+        <span class="progress-label" id="prog-label-llm">Downloading…</span>
+        <span class="progress-stats" id="prog-stats-llm"></span>
+      </div>
+      <div class="progress-track"><div class="progress-bar" id="prog-bar-llm"></div></div>
+      <div class="progress-msg" id="prog-msg-llm"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Launch ──────────────────────────────────────────────────────── -->
+<div class="launch-box" id="launch-box">
+  <h2>✅ GARY is ready</h2>
+  <p>All models downloaded. Click below to start your first conversation.</p>
+  <button class="btn-launch" onclick="location.href='/'">Launch GARY →</button>
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────
+const CATEGORIES = ['asr','tts','llm'];
+const catalog = {};     // category → array of model specs
+const status  = {};     // modelId → status object
+let flashMoeReady = false;
+let activeSSE = {};     // category → EventSource
+
+// ── Init ──────────────────────────────────────────────────────────────
+async function init() {
+  try {
+    const [catRes, statRes] = await Promise.all([
+      fetch('/api/setup/models'),
+      fetch('/api/setup/status'),
+    ]);
+    const catData  = await catRes.json();
+    const statData = await statRes.json();
+
+    flashMoeReady = statData.flash_moe?.ready ?? false;
+
+    // flatten model status by id
+    for (const [id, m] of Object.entries(statData.models || {})) {
+      status[id] = m;
+    }
+
+    // populate selects & info
+    for (const cat of CATEGORIES) {
+      const models = catData[cat] || [];
+      catalog[cat] = models;
+      const sel = document.getElementById('sel-' + cat);
+      sel.innerHTML = '';
+      for (const m of models) {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.text = `${m.display_name} (${m.size_gb} GB)`;
+        sel.appendChild(opt);
+      }
+      sel.addEventListener('change', () => refreshCardInfo(cat));
+      refreshCardInfo(cat);
+    }
+
+    // LLM: show engine warning if binary missing
+    if (!flashMoeReady) {
+      document.getElementById('engine-warn').style.display = 'block';
+      document.getElementById('btn-llm').disabled = true;
+    }
+
+    checkAllDone();
+  } catch (e) {
+    console.error('Setup init failed:', e);
+  }
+}
+
+// ── Card info refresh ─────────────────────────────────────────────────
+function refreshCardInfo(cat) {
+  const sel     = document.getElementById('sel-' + cat);
+  const modelId = sel.value;
+  const m       = (catalog[cat] || []).find(x => x.id === modelId);
+  const st      = status[modelId];
+  const infoEl  = document.getElementById('info-' + cat);
+  const pillEl  = document.getElementById('pill-' + cat);
+  const btnEl   = document.getElementById('btn-' + cat);
+  const tokenEl = document.getElementById('token-row-' + cat);
+  const card    = document.getElementById('card-' + cat);
+
+  if (!m) return;
+
+  // model info line
+  const sizeOnDisk = st?.size_on_disk_gb ? ` · ${st.size_on_disk_gb} GB on disk` : '';
+  const vram       = m.vram_gb ? ` · ≥ ${m.vram_gb} GB RAM` : '';
+  infoEl.innerHTML = `<span>📦 ${m.size_gb} GB download${sizeOnDisk}</span><span>🏷️ ${m.hf_repo}${vram}</span>`;
+
+  // token row
+  if (m.requires_token) tokenEl.style.display = 'flex';
+  else tokenEl.style.display = 'none';
+
+  // pill + button
+  if (st?.ready) {
+    pillEl.className = 'status-pill pill-ok';
+    pillEl.textContent = 'Ready';
+    btnEl.textContent = '✓ Downloaded';
+    btnEl.disabled = true;
+    card.classList.add('done');
+    card.classList.remove('active');
+  } else {
+    pillEl.className = 'status-pill pill-ready';
+    pillEl.textContent = 'Not downloaded';
+    btnEl.textContent = 'Download';
+    btnEl.disabled = (cat === 'llm' && !flashMoeReady);
+    card.classList.add('active');
+    card.classList.remove('done');
+  }
+}
+
+// ── Download via SSE ──────────────────────────────────────────────────
+function startDownload(cat) {
+  const sel     = document.getElementById('sel-' + cat);
+  const modelId = sel.value;
+  const token   = document.getElementById('hf-token-' + cat)?.value || '';
+  const progWrap = document.getElementById('prog-' + cat);
+  const progBar  = document.getElementById('prog-bar-' + cat);
+  const progMsg  = document.getElementById('prog-msg-' + cat);
+  const progStats = document.getElementById('prog-stats-' + cat);
+  const progLabel = document.getElementById('prog-label-' + cat);
+  const btnEl   = document.getElementById('btn-' + cat);
+
+  btnEl.disabled = true;
+  btnEl.textContent = 'Starting…';
+  progWrap.style.display = 'block';
+  progBar.className = 'progress-bar indeterminate';
+  progMsg.textContent = 'Connecting…';
+
+  const url = '/api/setup/download/' + encodeURIComponent(modelId) +
+    (token ? '?hf_token=' + encodeURIComponent(token) : '');
+
+  // Close any existing SSE for this category
+  if (activeSSE[cat]) { activeSSE[cat].close(); }
+
+  const es = new EventSource(url);
+  activeSSE[cat] = es;
+
+  es.onmessage = (e) => {
+    let evt;
+    try { evt = JSON.parse(e.data); } catch { return; }
+
+    if (evt.type === 'heartbeat') return;
+
+    if (evt.type === 'checking') {
+      progMsg.textContent = evt.message || '';
+      progBar.className = 'progress-bar indeterminate';
+      progLabel.textContent = 'Starting…';
+    }
+
+    if (evt.type === 'progress') {
+      progBar.className = 'progress-bar';
+      progBar.style.width = (evt.pct || 0) + '%';
+      progLabel.textContent = `Downloading — ${evt.pct || 0}%`;
+      const parts = [];
+      if (evt.speed_mbps) parts.push(evt.speed_mbps + ' MB/s');
+      if (evt.eta_s) parts.push(fmtEta(evt.eta_s));
+      progStats.textContent = parts.join(' · ');
+      const done = evt.bytes_done ? fmtBytes(evt.bytes_done) : '';
+      const total = evt.bytes_total ? fmtBytes(evt.bytes_total) : '';
+      progMsg.textContent = done && total ? `${done} / ${total}` : '';
+    }
+
+    if (evt.type === 'done') {
+      progBar.className = 'progress-bar';
+      progBar.style.width = '100%';
+      progLabel.textContent = evt.cached ? 'Already downloaded' : 'Complete!';
+      progStats.textContent = '';
+      progMsg.textContent = evt.path || '';
+      // Update status
+      status[modelId] = { ...(status[modelId] || {}), ready: true, path: evt.path };
+      refreshCardInfo(cat);
+      es.close();
+      delete activeSSE[cat];
+      checkAllDone();
+    }
+
+    if (evt.type === 'error') {
+      progBar.className = 'progress-bar';
+      progBar.style.background = 'var(--danger)';
+      progBar.style.width = '100%';
+      progLabel.textContent = 'Error';
+      progMsg.textContent = evt.message || 'Download failed';
+      progStats.textContent = '';
+      btnEl.disabled = false;
+      btnEl.textContent = 'Retry';
+      es.close();
+      delete activeSSE[cat];
+    }
+  };
+
+  es.onerror = () => {
+    progMsg.textContent = 'Connection lost — retrying…';
+  };
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────
+function fmtBytes(b) {
+  if (b >= 1e9) return (b/1e9).toFixed(2) + ' GB';
+  if (b >= 1e6) return (b/1e6).toFixed(1) + ' MB';
+  return (b/1024).toFixed(0) + ' KB';
+}
+
+function fmtEta(s) {
+  if (s < 60) return s + 's';
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${m}m ${rem}s`;
+}
+
+function toggleToken(cat) {
+  const inp = document.getElementById('hf-token-' + cat);
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+}
+
+function checkAllDone() {
+  const selAsr  = document.getElementById('sel-asr').value;
+  const selTts  = document.getElementById('sel-tts').value;
+  const selLlm  = document.getElementById('sel-llm').value;
+  const allReady = status[selAsr]?.ready && status[selTts]?.ready && status[selLlm]?.ready;
+  document.getElementById('launch-box').style.display = allReady ? 'block' : 'none';
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>

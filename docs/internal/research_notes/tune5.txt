@@ -1,0 +1,464 @@
+You’ve already built the hard part. The core architecture is strong, and the sacred-reflex principle is exactly right.
+
+The biggest thing missing is not another subsystem. It is a **real cognitive tempo controller**.
+
+Right now JARVIS still behaves too much like one brilliant system doing everything with roughly the same “thinking shape.” For what you want — faster, more human, more fluid, more internally alive, with many small ideas instead of fewer long ones — I would make one foundational shift:
+
+**Spoken turns should be optimized in breaths. Internal thought should be optimized in packets.**
+
+That is the center of gravity I’d move the whole system toward.
+
+## My strongest recommendation
+
+Add a small, deterministic **Tempo Controller** in the reflex path, and a separate **Idea Scheduler** in the mind path.
+
+The Tempo Controller decides, per user turn, whether JARVIS should:
+
+* answer immediately and finish in one pass,
+* answer immediately with a short useful headline and keep deepening,
+* or take longer because the value of deliberation is genuinely worth the delay.
+
+The Idea Scheduler decides, while idle, whether the mind should:
+
+* reflect,
+* brainstorm,
+* dream,
+* or validate and compress.
+
+Those are two different clocks. Right now they are too entangled.
+
+Your own docs already point to the current mismatch: the reflex path is designed as sacred, but the present embedded mind still shares the expensive path in a way that works against the “answer fast, think later” ideal. That is the first thing I would finish.
+
+## 1. Make “answer now unless delay buys real value” a load-bearing rule
+
+This should become an explicit policy, not just a hope.
+
+The controller should score each turn on:
+
+* complexity,
+* stakes,
+* need for retrieval/tools,
+* likelihood a short answer is enough,
+* user’s learned brevity preference,
+* urgency inferred from voice behavior,
+* whether this is a follow-up on an active stream.
+
+Then it outputs a turn mode.
+
+I would structure it like this:
+
+**User-Direct / Quick**
+Use when the question is simple, familiar, low-risk, or likely satisfiable in one pass.
+Goal: one-breath or two-breath answer.
+No filler. No hidden thinking. Minimal context.
+
+**User-Direct / Deliberate**
+Use when there is real value in spending more time.
+Goal: give a useful headline immediately, then deepen.
+This is where a short semantic bridge is allowed.
+
+**Reflection**
+Short internal reappraisal of what just happened.
+
+**Brainstorm**
+Short chained hypothesis generation around a user problem or open loop.
+
+**Dream**
+High-creativity associative wandering, but still packetized and still tied to utility.
+
+The key policy is:
+
+**Only delay the user if the expected gain from thinking exceeds the cost of waiting.**
+
+That sounds obvious, but making it explicit will change the whole feel of the system.
+
+## 2. The fastest path should often bypass the 35B entirely
+
+This is probably the highest-leverage speed win.
+
+Right now the system is architected as though the reflex voice mostly means “invoke the big model.” That is too expensive for a voice-first assistant.
+
+I would turn your sidecar into a **Scout** in addition to a mind daemon.
+
+The route ladder should be:
+
+1. **Deterministic path** for obvious commands and control actions.
+2. **Memory verbalizer path** when a high-confidence claim/open loop already answers the question.
+3. **Scout final-answer path** for simple, low-risk turns.
+4. **35B direct path** for normal nontrivial turns.
+5. **Scout bridge + 35B deep path** for complex turns.
+
+That gives you the behavior you want:
+
+* ideally one-shot,
+* only spend time when needed,
+* and even then say something useful right away.
+
+The important guardrail is confidence. The Scout should only be allowed to fully answer when confidence is high and stakes are low. Otherwise it should produce a short, useful bridge or headline while the deeper path runs.
+
+A good hot-path flow is:
+
+```text
+ASR complete
+  ├─ fast memory lookup
+  ├─ scout classify + draft
+  ├─ deep retrieval/context build
+  └─ tempo controller decision
+
+if memory hit with high confidence:
+    speak verbalized answer
+elif scout says simple + high confidence:
+    speak scout answer
+elif complex:
+    speak scout bridge or headline
+    continue with 35B
+else:
+    stream 35B directly
+```
+
+That is the architecture that will make JARVIS feel fast without making it shallow.
+
+## 3. Context Pack v2 should become Context Pack v3: adaptive, smaller, query-linked
+
+This is another big one.
+
+Your current Context Pack v2 is conceptually right, but for a fast voice assistant it is still too blunt. Fast turns should not pay the same context tax as deep turns.
+
+I would make the pack dynamic by mode:
+
+**Fast pack**
+Very small. Last user turn, last assistant turn, maybe one relevant loop or claim if directly matched.
+Target: tiny prefill.
+
+**Working pack**
+Add targeted retrieval and one or two relevant memory/claim anchors.
+
+**Deep pack**
+Use richer retrieval only when the controller chooses deliberate/deep.
+
+Two specific changes matter a lot:
+
+First, stop injecting global “top” items when they are not query-relevant.
+A `TOP_CLAIMS` slot chosen by confidence rather than current relevance can slow the model and bias it off-course. In a fast voice system, relevance beats static salience.
+
+Second, shorten history much more aggressively on quick turns.
+I would not think in “20 or 10.” I would think in something more like “2, 4, 8, or 10” depending on mode.
+
+So the controller can emit something like:
+
+```text
+MODE=SNAP PACK=FAST HISTORY=2 THINK=OFF MAX_BREATHS=2 LEAD=ANSWER
+```
+
+That kind of compact control line is cheaper and more reliable than extra prose instructions.
+
+## 4. Stop making the mind write little essays
+
+This is the biggest design change for the internal dialogue.
+
+Right now the inner life is still too paragraph-shaped.
+
+Paragraphs feel smart, but they are the wrong primitive for what you want.
+
+You want:
+
+* more ideas,
+* faster iteration,
+* better chaining,
+* clearer persistence,
+* better colorization,
+* and less slowdown.
+
+So the primitive should become a **thought packet**, not a mini-monologue.
+
+Each packet should contain a few typed nodes, each very short, each linked to a prior node or memory.
+
+Something like this:
+
+```json
+{
+  "stream_id": "openloop:latency_policy",
+  "lane": "brainstorm",
+  "nodes": [
+    {"id": "n1", "kind": "question", "text": "Why does it still feel slow?", "refs": ["turn:842"]},
+    {"id": "n2", "kind": "hypothesis", "text": "Fast turns still pay full context tax.", "refs": ["n1"]},
+    {"id": "n3", "kind": "experiment", "text": "Try fast-pack before deep-pack.", "refs": ["n2"]}
+  ],
+  "next_action": "seek_memory",
+  "epistemic_status": "inferred"
+}
+```
+
+That format is much better than prose for almost everything you care about:
+
+* higher idea throughput,
+* explicit chaining,
+* precise memory refs,
+* easy color-coding,
+* easier compression,
+* better eval,
+* cleaner promotion into questions, ideas, claims, and open loops.
+
+My strong recommendation is:
+
+**the mind panel should stop rendering raw token streams as the primary artifact. Tokens are for debugging. The primary artifact should be nodes and links.**
+
+## 5. Use bursty, chained micro-pulses instead of fewer long pulses
+
+You said you want more ideas flowing.
+
+The right way to get that is not “let the mind talk longer.”
+It is “let the mind emit more, smaller, connected packets.”
+
+I would redesign the modes like this:
+
+**Reflection**
+2–3 nodes, around 25–40 tokens total.
+Purpose: observe, reappraise, open one question, choose next move.
+
+**Brainstorm**
+3–5 nodes, around 35–70 tokens total.
+Purpose: generate a hypothesis, a counterpoint, and a possible test.
+
+**Dream**
+2–4 nodes, around 20–50 tokens total.
+Purpose: image, analogy, odd link, utility guess.
+Not essays. Not philosophy for its own sake.
+
+**Validator**
+2–3 nodes, short and strict.
+Purpose: promote, test, shelve, or quarantine.
+
+That gives you more ideas per minute without exploding compute.
+
+The deeper insight here is:
+
+**Optimize the mind for packets per minute, not tokens per minute.**
+
+That is how you get the “sea of ideas” feel.
+
+## 6. Build continuity around active streams, not giant transcript windows
+
+If you make thoughts shorter, you need stronger continuity.
+
+That continuity should not come from dumping more history into prompts. It should come from **active streams**.
+
+At any time, JARVIS should have maybe three to five active streams, each anchored to something real:
+
+* a user problem,
+* an open loop,
+* a question,
+* a curiosity thread,
+* a self-model thread.
+
+Each new thought packet attaches to one stream and may cross-link another.
+
+Then when the user speaks, the mind does not “lose itself.” It does this:
+
+1. snapshot active streams,
+2. park them instantly,
+3. yield to user-direct mode,
+4. resume later from the stream capsule.
+
+That makes the agent feel like it has continuity of inner life without sacrificing responsiveness.
+
+This is how you get what you described: a dreamer of its own, but still fully bound to the human when called.
+
+## 7. Decouple humanity from verbosity
+
+This matters a lot.
+
+A more human-like agent should not become a more long-winded agent.
+
+High humanity should change:
+
+* initiative,
+* timing,
+* warmth,
+* memory use,
+* curiosity,
+* self-directed follow-up,
+* emotional texture.
+
+It should **not** automatically increase answer length.
+
+So I would explicitly decouple:
+
+* `humanity -> initiative, affect expression, dream rate, curiosity rate`
+  from
+* `response length -> tempo controller + learned user preference`
+
+That will keep the system human without making it slow.
+
+## 8. Make the first spoken clause do real work
+
+Because your TTS is sentence-streamed, the first clause matters enormously.
+
+Two specific recommendations:
+
+First, add a **response shaper** that strips low-value preambles from the speech path.
+Things like “Sure,” “Absolutely,” “Okay,” “So,” “Let’s see” are often just latency disguised as politeness.
+
+Second, make “answer-first” truly load-bearing.
+The first clause should carry one of:
+
+* the answer,
+* the best current recommendation,
+* the uncertainty marker plus best guess,
+* or the action JARVIS is taking.
+
+For example:
+
+* “My top recommendation is a tempo controller.”
+* “Yes — use the small model first.”
+* “Probably the context pack is still too heavy.”
+
+That is what makes the system feel immediate.
+
+I would also suppress hidden reflex-side thinking on fast turns.
+The big model should not burn time on invisible thought when the user simply wants an answer. Deep internal cognition belongs primarily in the mind path, not the speech path.
+
+## 9. Filler audio should become rescue-only, not default
+
+This is one of the clearest tactical changes.
+
+Your current filler audio solves dead air, but if it always fires, it can make quick turns feel slower and more artificial.
+
+I would change the policy to:
+
+* **Quick turns:** no filler at all.
+* **Deliberate turns:** prefer a semantic bridge line.
+* **Only if nothing meaningful is ready by a short deadline:** play filler.
+
+So filler becomes a safety net, not a habit.
+
+That will make JARVIS feel much more fluid and much less like it is stalling.
+
+## 10. Give the mind a structured visual language
+
+Since you want colored internal components, I would color by **kind**, not only by phase.
+
+For example:
+
+* Observe = green
+* Question = cyan
+* Memory = indigo
+* Hypothesis = amber
+* Counterpoint = coral
+* Imagination = pink
+* Experiment = violet
+* Plan = gold
+* Verdict = white
+
+Then use the lane or mode as a secondary cue, like border tint or stream grouping.
+
+That way the user sees not just “the mind is thinking,” but **what kind of thought** is happening.
+
+I would also move from `mind_token` as the primary stream to something like:
+
+* `mind_node`
+* `mind_edge`
+* `mind_summary`
+* `mind_promote`
+
+That gives you a real cognitive UI instead of a token waterfall.
+
+## 11. Teach the system the user’s pace
+
+To make it feel personal and human, JARVIS should learn:
+
+* preferred answer length,
+* tolerance for pauses,
+* tolerance for proactive follow-ups,
+* whether the user likes headline-first or explanation-first,
+* how often long answers get interrupted.
+
+You already have the signals:
+
+* barge-ins,
+* stop button,
+* corrections,
+* ignored elaboration,
+* follow-up depth requests.
+
+Use those to build a simple online brevity model.
+
+This will do more for “human-like” feel than almost any single prompt change, because it makes the assistant adapt to the person’s rhythm.
+
+## 12. Let imagination branch, but force promotion discipline
+
+This is the balance I would anchor the whole system on:
+
+**Imagine widely. Believe narrowly.**
+
+Dream mode should absolutely produce more odd links, analogies, and speculative associations. But those should not immediately become beliefs or durable memory.
+
+The right flow is:
+
+dream packet -> validator -> experiment or memory seek -> promote or shelve
+
+That keeps the inner life rich without poisoning the truth layer.
+
+It also makes self-learning better, because the system learns from validated imagination, not raw fantasy.
+
+## 13. Measure the right things
+
+Your eval harness is already serious. I would add a few metrics that directly align with the behavior you want.
+
+For the user path:
+
+* **Time to first meaningful clause**, not just first audio.
+* **First-sentence utility rate**.
+* **One-shot resolution rate**.
+* **Interrupt-after-elaboration rate**.
+
+For the mind path:
+
+* **Idea packets per minute**.
+* **Branch factor per stream**.
+* **Cross-link density**.
+* **Resume continuity after interruption**.
+* **Promotion precision** from dream/brainstorm to validated memory.
+
+For learning:
+
+* log `response_mode`, `first_clause`, `user_interrupted`, `accepted_without_followup`, and `needed_deepening` into the distillation path.
+
+That will let the controller learn the speed/depth tradeoff over time.
+
+## 14. The implementation order I’d use
+
+If I were sequencing this, I’d do it in this order:
+
+**First:** finish the isolation story.
+Move mind fully off the reflex path and stop using the 35B reflex engine for background cognition.
+
+**Second:** add `tempo_controller.py`.
+Make it choose mode, route, context budget, history budget, breath budget, and whether hidden reasoning is allowed.
+
+**Third:** add the route ladder.
+Deterministic -> memory verbalizer -> scout final -> 35B direct -> scout bridge + 35B.
+
+**Fourth:** build Context Pack v3.
+Adaptive, query-linked, smaller on fast turns.
+
+**Fifth:** replace prose mind output with structured packets inside `thoughts.content` first.
+You do not need a full new schema on day one.
+
+**Sixth:** add active stream capsules and burst scheduling.
+That is where the “sea of ideas” really starts to appear.
+
+## Bottom line
+
+Your system does not need more cognition first.
+
+It needs **smaller units of cognition and better timing**.
+
+The three changes with the biggest payoff are:
+
+1. **A real Tempo Controller** that decides when to answer immediately and when delay is worth it.
+2. **A multi-route user path** so simple turns do not always pay the 35B cost.
+3. **A packetized internal mind** built from short typed nodes chained through active streams, instead of tiny essays.
+
+Those three changes would make JARVIS noticeably faster, more fluid, more human, and much more alive without sacrificing the depth you are aiming for. They are the right foundation for a v3.2.
+

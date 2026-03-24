@@ -1,0 +1,723 @@
+Yes. This latest v4 plan is very strong — and it is stronger than my pooled plan on **specificity, file-level concreteness, and rollout completeness**.
+
+But I would **not** give it 100/100 yet.
+
+## Scores
+
+I’d score them like this:
+
+| Plan                        | Strategic design | Execution realism | Overall |
+| --------------------------- | ---------------: | ----------------: | ------: |
+| My pooled recommendation    |               98 |                90 |  **94** |
+| Your updated JARVIS v4 plan |               97 |                86 |  **93** |
+
+If I score your updated v4 plan **specifically against the original prompt**, it does even better:
+
+| Original goal                                           | Score |
+| ------------------------------------------------------- | ----: |
+| Human-like internal dialogue with real mission pressure |    92 |
+| Truthful self-understanding of full system              |    96 |
+| User can change settings/mission/self                   |    97 |
+| Safe self-edit with git, tests, rollback                |    95 |
+| Avoid reloading heavy models during upgrade             |    90 |
+| Practicality / likelihood of shipping cleanly           |    82 |
+
+So the updated plan is **excellent as a target architecture**, but **not yet perfect as a shipping plan**.
+
+The biggest reason is simple:
+
+**it is still a little too eager to solve everything with more structure, more states, and more moving parts — and a few of those additions will create new failure modes unless you tighten the control semantics further.**
+
+# My most direct feedback
+
+## 1. Your “9-state floor machine” is actually 10 states, and it is mixing three different concepts
+
+You list:
+
+* booting
+* user_acquiring
+* user_speaking
+* asr_pending
+* foreground_thinking
+* agent_speaking
+* cooldown
+* engaged_silence
+* truly_idle
+* maintenance
+
+That is **10**, not 9.
+
+More importantly, it mixes:
+
+* **floor ownership**
+* **engagement / warmth**
+* **maintenance mode**
+
+That will get brittle.
+
+### What I would change
+
+Internally, I would split this into **orthogonal axes**, even if you still expose a single derived state for debugging/UI.
+
+Something like:
+
+* `floor_owner = boot | user | asr | assistant_thinking | assistant_audio | none`
+* `engagement = hot | cooldown | engaged | idle`
+* `mode = normal | maintenance`
+
+Then derive:
+
+* `background_eligible`
+* `initiative_eligible`
+* `can_accept_audio`
+* `can_start_asr`
+
+That gives you cleaner invariants and fewer impossible transitions.
+
+### Why this matters
+
+Right now `MAINTENANCE` is not really a floor state. `ENGAGED_SILENCE` is not really floor ownership either. If you keep all of that in one enum, you will eventually end up with awkward transitions and “this should never happen” bugs.
+
+This is one of the biggest things I would change.
+
+---
+
+## 2. `background_eligible` needs revocable leases, not just a boolean predicate
+
+This is probably the **single most important missing safety detail** in the latest plan.
+
+Right now the plan says:
+
+* mind loop checks `supervisor.background_eligible`
+* initiative worker checks it too
+* if okay, it proceeds
+
+That creates a **time-of-check / time-of-use race**.
+
+Example:
+
+* ambient mind becomes eligible
+* initiative worker starts TTS synthesis
+* user begins speaking 120 ms later
+* initiative worker still sends audio because it already passed the gate
+
+### What I would change
+
+Add **revocable leases**.
+
+Example conceptually:
+
+* `lease = supervisor.acquire_background_lease(kind="mind")`
+* `lease = supervisor.acquire_initiative_lease(candidate_id, ttl=5.0)`
+
+On:
+
+* onset
+* VAD speech-start
+* transcript arrival
+* interrupt hint
+* pending turn creation
+
+the supervisor should revoke all background/initiative leases immediately.
+
+Every ambient task and initiative task must re-check the lease:
+
+* before LLM call
+* before TTS synthesis
+* before `audio_start`
+* before each sentence chunk if needed
+
+### Why this matters
+
+Without leases, you will still get ghost proactivity and racey floor theft even with a better state machine.
+
+---
+
+## 3. `pending_user_turn_id` is good, but it is not enough
+
+A single UUID is better than nothing, but it is still too weak for real turn sovereignty.
+
+You need turn status, not just turn existence.
+
+### What I would change
+
+Replace the single field with a small turn record:
+
+* `pending`
+* `answering`
+* `answered`
+* `superseded`
+* `failed`
+* `abandoned`
+
+And track:
+
+* transcript timestamp
+* answer-start timestamp
+* answer-end timestamp
+* interrupted-by turn id
+* failure reason if any
+
+### Why this matters
+
+Because these cases are different:
+
+* user asks something and gets answered normally
+* user interrupts the answer halfway through
+* the system times out and apologizes
+* a newer user turn supersedes the earlier one
+* TTS starts but the browser crashes
+* an ASR transcript lands but no answer ever starts
+
+With only `pending_user_turn_id`, you will end up clearing debt too bluntly and masking bugs.
+
+---
+
+## 4. I would make ambient mind **sidecar-only** in production
+
+This is a major concern in the updated plan.
+
+You did a beautiful job fixing floor sovereignty, but the plan does not force the more important production rule:
+
+**ambient cognition should never share the reflex model path in production.**
+
+### What I would change
+
+Make this explicit:
+
+* foreground reasoning may use reflex model
+* ambient mind must use remote `mindd` sidecar only
+* no embedded ambient mind in production mode
+* no shared `llm_gate` contention with reflex path
+
+### Why this matters
+
+You can fix the scheduler and still lose the voice loop if ambient work shares the main inference lane or shared locks.
+
+This should be a hard production invariant.
+
+---
+
+## 5. Add a real **resource broker** back into the plan
+
+This is one of the biggest omissions relative to your own Architecture Bible.
+
+The new plan adds:
+
+* more roles
+* more structured cognition
+* more replay
+* more self-inspection
+* more daemons
+
+But it does not strongly reintroduce the **resource broker** as an explicit subsystem.
+
+### What I would change
+
+Add hard budgets for:
+
+* background LLM calls per minute
+* total background GPU-seconds per minute
+* embeddings per minute
+* maximum ambient work while TTFT p95 is degraded
+* total session replay cost during Forge runs
+
+And add a circuit breaker:
+
+* if TTFT or barge-in latency drifts, ambient work is paused immediately
+
+### Why this matters
+
+Your original complaint is about mediocre cognition, but on a local Mac the fastest way to make it worse is to add more “smartness” that steals latency.
+
+The system has to stay reflex-first.
+
+---
+
+## 6. The biggest missing piece relative to the original prompt: a **real knowledge acquisition loop**
+
+This is the best new idea I would add.
+
+The updated plan is excellent at:
+
+* self-repair
+* self-modeling
+* self-editing
+* quest-like internal structure
+
+But the original prompt wanted something more ambitious:
+
+> “it should be pursuing its own mission to find interesting ideas worth pursuing, ideally new knowledge”
+
+Right now the Researcher role mostly follows internal questions and existing priors.
+
+That is not the same thing as **gaining new knowledge**.
+
+### What I would add
+
+A permissioned **Discovery Pipeline**:
+
+* `research_permissions` in mission profile
+* optional allowed domains / feeds / local corpora
+* max background research budget per hour/day
+* retrieved findings go into `artifacts`, `claims`, `ideas`, or `questions`
+* all externally acquired knowledge must carry provenance and validation status
+* no unsolicited surfacing unless initiative policy approves it
+
+If you want “science focus” to feel real, the system needs a way to actually learn something new, not just reshuffle what the model already knows.
+
+### Why this matters
+
+Without this, the internal dialogue may become cleaner and more structured, but it still won’t fully satisfy the “pursuing interesting new knowledge” part of the prompt.
+
+This is the biggest gap in the latest plan.
+
+---
+
+## 7. I would add a unified **Quest Ledger**
+
+Your plan already has `quest_id`, `recent_quests`, and threaded background topics. Good.
+
+I would go one step farther and add an actual unified table or projection for quests/work items.
+
+### What I would add
+
+A `quests` layer that unifies:
+
+* open questions
+* repair items
+* experiments
+* longer-term projects
+* mission-aligned research threads
+
+Each quest would have:
+
+* `type`
+* `mission_axis`
+* `status`
+* `salience`
+* `source_refs`
+* `next_action`
+* `owner_lane`
+* `last_touched_at`
+
+### Why this matters
+
+This is what will make the mind feel like it has **persistent interests** rather than just bursts of role-based activity.
+
+It also gives the Mind Inspector something legible to show:
+
+* current science quest
+* current repair quest
+* current open experiment
+* current suppressed initiative
+
+That is far more compelling than raw inner voice lines.
+
+---
+
+## 8. Bring back **shadow mode** for initiative explicitly
+
+This is a very important change.
+
+Your updated plan has:
+
+* initiative worker
+* initiative candidate routing
+* better gating
+
+But it no longer strongly emphasizes **shadow mode rollout**.
+
+### What I would change
+
+Make proactive speech shadow-only until all of these are true:
+
+* floor violation rate is at zero
+* psychologizing rate is low
+* initiative helpfulness is above threshold
+* user’s social budget / preference allows it
+* presence confidence is high enough
+
+Until then:
+
+* ambient mind can propose initiative
+* it gets logged
+* it is not spoken
+
+### Why this matters
+
+The current failure mode is literally bad initiative. The safest rollout is to fix cognition first and only then let it speak.
+
+---
+
+## 9. Add explicit **presence confidence** back in
+
+Related to the above: `TRULY_IDLE` is not enough for initiative.
+
+A user may be idle but absent.
+Or idle but thinking.
+Or the tab may be open but the user is gone.
+
+### What I would change
+
+Separate:
+
+* `background_eligible`
+* `initiative_eligible`
+
+And require for initiative:
+
+* `background_eligible == True`
+* `presence_conf >= threshold`
+* social budget available
+* candidate score above threshold
+* not recently ignored / regretted
+
+### Why this matters
+
+Ambient mind can still think quietly if the user is absent.
+But voice initiative should be much stricter.
+
+That will make the system feel less needy and less uncanny.
+
+---
+
+## 10. `SELF_PACK` should be built primarily from manifests and runtime, not from the Bibles
+
+This is subtle but important.
+
+The latest plan says the self-manifest is compiled from the Bibles plus runtime.
+
+I would flip that.
+
+### What I would change
+
+Source-of-truth order should be:
+
+1. runtime introspection
+2. machine-readable manifests
+3. code atlas / module contracts
+4. human-written Bibles
+5. model inference
+
+The Bibles should help with narrative explanations, but not be the primary source of operational truth.
+
+### Why this matters
+
+If docs drift from code, JARVIS becomes confidently wrong about itself.
+
+For self-questions, it should know what is:
+
+* live runtime truth
+* design truth
+* inferred truth
+
+You want provenance on self-knowledge too.
+
+---
+
+## 11. Don’t store live mission/settings only as JSON files in the repo
+
+This is another direct change I would make.
+
+Using repo JSON files for:
+
+* mission profile
+* runtime prefs
+* live settings
+
+is simple, but it creates concurrency and deployment headaches:
+
+* A/B slots may disagree
+* hot reload gets messy
+* Forge may patch files the live runtime is also reading
+* rollback becomes muddier
+
+### What I would change
+
+Use a layered model:
+
+* repo defaults in versioned files
+* runtime overrides in DB
+* session overlay in memory
+
+That gives you:
+
+* persistence
+* version history
+* rollback
+* easier A/B coordination
+* less repo churn for every user preference tweak
+
+### Why this matters
+
+You want “change your background to red” and “focus on science” to feel like runtime mutations, not code edits.
+
+This is cleaner if the mutable layer lives outside the code tree.
+
+---
+
+## 12. I would not make `spec/invariants.yaml` totally immutable
+
+This is a smaller point, but worth changing.
+
+Your plan marks `spec/invariants.yaml` as effectively untouchable by self-edit.
+
+I agree that it should not be auto-edited casually. But making it effectively immutable may block healthy evolution.
+
+### What I would change
+
+Move it from:
+
+* immutable
+
+to:
+
+* human-approval / critical
+
+So Forge can:
+
+* propose changes to invariants
+* draft test updates
+* never auto-apply them without elevated approval
+
+### Why this matters
+
+Sacred rules do evolve. You just don’t want the assistant casually redefining them to pass its own tests.
+
+---
+
+## 13. I would not rely on cosine similarity to baseline answers in replay
+
+This could backfire badly.
+
+If you judge candidate responses by similarity to the old system, you risk preserving the very mediocrity you’re trying to escape.
+
+### What I would change
+
+Use:
+
+* invariant checks
+* latency checks
+* structure checks
+* task-specific semantic constraints
+* rubric-based judges where needed
+
+Not “stay close to baseline wording.”
+
+### Why this matters
+
+A better answer may be very different from the old one.
+
+You want to preserve correctness and UX, not phrasing.
+
+---
+
+## 14. Add a syntax-repair layer for JSON mind pulses
+
+I like the “no prose fallback in production” rule.
+
+But if you go from “malformed JSON” straight to “discard pulse,” the ambient mind may go dark more often than you want.
+
+### What I would change
+
+Keep:
+
+* no semantic prose fallback
+
+But allow:
+
+* syntax repair
+* fence stripping
+* bracket balancing
+* schema coercion
+
+Then validate strictly after repair.
+
+### Why this matters
+
+That gives you robustness without reopening the prose-control hole.
+
+---
+
+## 15. Don’t attempt true live A/B WebSocket handoff too early
+
+This is a major practical concern.
+
+Your Phase 8 is directionally right, but this part is harder than it looks:
+
+* active browser audio queues
+* `turn_epoch`
+* session-local state
+* interrupt events
+* in-flight turn debt
+* WebSocket continuity
+
+### What I would change
+
+For the first version:
+
+* only swap between turns
+* or deliberately force reconnect with maintenance overlay
+* keep `routerd` simple
+* do not attempt seamless mid-turn transfer
+
+Later, if you want true live handoff, you’ll need:
+
+* externally stored session state
+* shared epoch state
+* reconnection-safe turn semantics
+
+### Why this matters
+
+A “clever” live cutover can easily corrupt the exact audio/turn guarantees you are trying to protect.
+
+---
+
+# Major concerns
+
+These are the biggest things I think could break.
+
+## State explosion
+
+The floor machine may become too clever and hard to reason about unless you split it into orthogonal fields.
+
+## Race conditions
+
+Without leases, initiative and ambient work can still sneak through after the floor changes.
+
+## Compute contention
+
+More lanes and more daemons can quietly degrade reflex latency without a resource broker.
+
+## Self-model drift
+
+If `SELF_PACK` depends too much on docs, JARVIS will tell lies about itself with confidence.
+
+## Replay/privacy coupling
+
+Using recent user sessions in Forge replay is powerful, but it needs consent, redaction policy, and maybe a curated replay pool.
+
+## DB compatibility
+
+A/B swaps with shared Postgres are dangerous if candidate code assumes a changed schema.
+I would forbid automated live DB schema changes early on.
+
+## ASR/TTS daemonization cost
+
+Externalizing them helps warm restarts, but it may add latency and operational complexity. Benchmark before committing.
+
+## Overfitting to the bad session
+
+The 16:43 fixture should be gold — but don’t let it become the only thing you optimize for.
+
+---
+
+# The most important new ideas I would add
+
+If I were extending the updated plan, I would add these four:
+
+## 1. Quest Ledger
+
+A real unified backlog of research, repair, experiments, and mission threads.
+
+## 2. Discovery Pipeline
+
+Permissioned background knowledge acquisition so “science focus” can actually discover new things.
+
+## 3. Revocable leases
+
+For ambient tasks and initiative, to kill time-of-check / time-of-use bugs.
+
+## 4. Change escalation ladder
+
+Not just:
+
+* live setting
+* code patch
+
+But:
+
+* live setting
+* mission/profile change
+* prompt/retrieval change
+* small adapter / sidecar tuning
+* code patch
+* architecture change
+
+That is a better match for how self-improvement should actually work.
+
+---
+
+# If I were editing your plan directly, these are the exact changes I’d make
+
+## Add to Phase 0
+
+* Revocable background/initiative leases
+* Turn record statuses, not just `pending_user_turn_id`
+* Ambient mind sidecar-only production rule
+* Shadow mode for initiative
+* Presence confidence gating for initiative
+
+## Add to Phase 2 or 3
+
+* Quest Ledger
+* Discovery Pipeline / research permissions
+* explicit mind disclosure API for user self-queries
+* deterministic-first Mechanic and Archivist
+
+## Modify Phase 3
+
+* `SELF_PACK` truth hierarchy: runtime > manifests > code atlas > docs
+* move live settings to DB-backed overrides, not just repo JSON
+
+## Modify Phase 4
+
+* remove cosine similarity as a success signal
+* use semantic/rubric checks instead
+
+## Modify Phase 6
+
+* mark DB migrations/schema as human-approval only
+* move `spec/invariants.yaml` from immutable to critical/human-approved
+
+## Modify Phase 8
+
+* first A/B version only swaps between turns
+* do not attempt seamless live WS handoff initially
+
+---
+
+# Final verdict
+
+Your updated v4 plan is excellent.
+
+It is **more concrete than mine**, and on file-level execution planning it is genuinely better.
+
+The main things I would change are not philosophical. They are **control-theoretic**:
+
+* factor the state model,
+* add revocable leases,
+* reintroduce sidecar/resource isolation,
+* bring back shadow mode,
+* make self-truth come from manifests/runtime more than docs,
+* add a real discovery loop so “science focus” means actual knowledge acquisition,
+* and make the quest system explicit.
+
+The single biggest gap relative to the original prompt is this:
+
+**You have a strong repair-and-self-edit architecture, but you still need a stronger “interesting knowledge pursuit” architecture.**
+
+If you add:
+
+* Quest Ledger
+* Discovery Pipeline
+* DriveVector
+* validated rewards
+
+then the internal dialogue stops being “cleaner background prose” and becomes what you actually want:
+
+**a system with persistent interests, real research threads, repair instincts, and safe self-modification.**
+
+If you want, I can take your updated v4 plan and rewrite it into a **v4.1 redline** with only the changes I think should be made.
+

@@ -1,0 +1,636 @@
+After reading both Bibles closely, my strongest recommendation is this:
+
+**Add an explicit Attention Controller, and shrink the unit of thought.**
+
+That is the big missing layer.
+
+Right now JARVIS already has excellent bones: sacred reflex loop, memory spine, sidecar path, question ledger, open loops, affect, initiative shadowing, retrieval audit, training buffer. But the system still behaves a little too much like one large mind with background extras.
+
+To get the feel you want — **fast, fluid, human, independent, imaginative** — I would make two foundational changes:
+
+1. **Public responses should be controlled by a latency-and-depth governor.**
+2. **Private cognition should stop thinking in paragraphs and start thinking in chained “thoughtlets.”**
+
+That will give you both things you want at once:
+**shorter, faster replies to the user**, and **many more internal ideas flowing and iterating on themselves**.
+
+---
+
+## The main diagnosis
+
+The current architecture is strongest where it protects the voice loop, but weakest where it decides **how much cognition a turn deserves**.
+
+You already have timing, phases, lanes, affect, memory, and a sidecar path. What you do **not** yet have as a first-class subsystem is the thing that says:
+
+* this turn deserves an instant one-shot answer,
+* this turn deserves a fast partial answer plus deeper follow-on,
+* this turn deserves real deliberate thinking,
+* this idle period should be reflection,
+* this idle period should be brainstorming,
+* this idle period should be dreaming.
+
+That controller should become the real brainstem of JARVIS.
+
+The second issue is that the internal monologue is still too **sentence-shaped**. Even with lane prompts, it is producing chunks of prose. Prose is bad for what you want. It is hard to color, hard to chain, hard to score, hard to branch, and it naturally trends toward fewer longer ideas.
+
+You want the opposite:
+**more ideas, smaller units, tighter chaining, easier memory, easier validation, easier surfacing.**
+
+---
+
+## My best overall design
+
+I would structure the system like this:
+
+### Public lane: `USER_DIRECT`
+
+This is the only lane that talks to the user. It has three submodes:
+
+* **FAST**: instant one-shot answer
+* **LAYERED**: quick useful answer, then optional deepen
+* **DELIBERATE**: quick bridge sentence, then deeper solve
+
+### Private lanes
+
+* **REFLECTION**: short, anchored, self-corrective
+* **BRAINSTORM**: short, branching, problem-solving
+* **DREAM**: short, high-novelty, associative
+* **VALIDATOR**: selective, slower, gatekeeper before promotion
+
+That is the right shape.
+
+So I would not think of “user-direct, reflection, brainstorm, dream” as peers. I would think of them as:
+
+* one **public** lane with depth submodes,
+* three **private** generative lanes,
+* one **private** validating lane.
+
+That creates a much cleaner servant/dreamer split.
+
+---
+
+## 1. Add an `AttentionController`
+
+This should sit logically between ASR and `_generate_and_speak()`, and also above mind scheduling.
+
+Its job is to decide, per turn:
+
+* which mode to use,
+* which model to use,
+* which context pack to use,
+* how much time to spend before first useful speech,
+* whether deepening should remain private or be surfaced,
+* what private lane should run after the turn.
+
+### What it should output
+
+For every user turn, produce a `ResponsePlan` like:
+
+```python
+@dataclass
+class ResponsePlan:
+    mode: Literal["fast", "layered", "deliberate"]
+    model: Literal["sidecar", "reflex_35b", "deterministic"]
+    pack: Literal["fast", "deep"]
+    first_reply_deadline_ms: int
+    max_initial_sentences: int
+    max_initial_tokens: int
+    allow_deepen: bool
+    deepen_only_if_utility_delta: float
+    post_turn_lane: Literal["reflect", "brainstorm", "none"]
+```
+
+### Decision policy
+
+A simple heuristic version first is enough:
+
+* **FAST**
+
+  * short/simple question
+  * no tool use
+  * no multi-step reasoning
+  * not high-stakes
+  * high confidence from memory/state
+* **LAYERED**
+
+  * medium complexity
+  * architectural/design questions
+  * synthesis that benefits from fast executive summary first
+* **DELIBERATE**
+
+  * code, math, planning, tool use, high-stakes, ambiguity, research
+
+### The rule it should optimize
+
+Not TTFT.
+
+**TTFU — time to first useful utterance.**
+
+That is the real experience target.
+
+Filler audio helps with dead air, but it is not the same as usefulness. The user wants JARVIS to feel like it already has the shape of the answer.
+
+---
+
+## 2. Make the small sidecar the default first responder
+
+This is the highest-ROI change in the whole system.
+
+Your Flash-MoE reflex model is extraordinary, but it should become the **strategist**, not the **greeter**.
+
+For most turns, the first spoken sentence should come from a much smaller responder path, ideally the sidecar model with a fast-response prompt, or even a deterministic template path when applicable.
+
+### Why this matters
+
+You are currently spending too much prestige compute on turns that do not deserve it.
+
+The result is that the user experience is bounded by the slowest intelligence in the room.
+
+Instead:
+
+* let the **small model** own the first useful sentence,
+* let the **35B** wake only when the turn actually needs depth.
+
+### The ideal behavior
+
+For simple turns:
+
+* the small model answers, done.
+
+For medium turns:
+
+* the small model gives the executive summary,
+* the 35B works in parallel,
+* the continuation is spoken only if it adds real value.
+
+For hard turns:
+
+* the small model says the core direction immediately,
+* the 35B thinks deeper.
+
+Example:
+
+User: “Why is the agent sometimes slow?”
+
+Fast reply:
+
+> “The biggest reason is that your deep model is still doing work that a smaller responder should handle first.”
+
+Then only continue if the deeper answer adds something substantial.
+
+That feels human.
+
+---
+
+## 3. Replace random filler as the default with **semantic bridge speech**
+
+Right now filler audio is smart as a dead-air patch, but for the design you want, it should become a **fallback**, not the primary pattern.
+
+The ideal order is:
+
+1. try to produce a **real first sentence** fast,
+2. if the deadline is missed, then play a brief semantic bridge,
+3. then continue.
+
+### Good bridge style
+
+Not “let me think.”
+
+More like:
+
+* “Yes — the core issue is lock contention.”
+* “I see the shape of it.”
+* “My fast read is this.”
+* “There are two big changes I’d make.”
+
+That buys time while still being informative.
+
+---
+
+## 4. Split context into `FAST_PACK` and `DEEP_PACK`
+
+This is important.
+
+Your current Context Pack v2 is good, but it is still one pack trying to serve multiple purposes.
+
+I would split it.
+
+### `FAST_PACK`
+
+Used for first response.
+
+Include only:
+
+* current user utterance
+* one-line rolling session summary
+* last user turn
+* top one relevant open loop or claim
+* one-line user preference summary
+* possibly a tiny affect summary if it changes tone
+
+This must be brutally compact.
+
+### `DEEP_PACK`
+
+Used only when the turn escalates.
+
+This can include:
+
+* current v2 slots
+* more history
+* top claims
+* open loops
+* top question
+* relevant thought branch summaries
+
+This one can cost tokens because it is only used when needed.
+
+This single change will make the system feel faster even before model routing improves.
+
+---
+
+## 5. Add a `SufficiencyStopper` and `UtilityDeltaGate`
+
+This is the second-biggest user-facing improvement after the controller.
+
+You do not just want faster starts. You want **clean stops**.
+
+### `SufficiencyStopper`
+
+After each completed sentence, ask:
+
+* has the question already been answered?
+* did the user probably get what they needed?
+* is the next sentence likely to be diminishing returns?
+
+If yes, stop generation.
+
+### `UtilityDeltaGate`
+
+For layered mode:
+
+* compare the deep answer to what was already spoken,
+* only surface the continuation if it adds enough new value.
+
+This prevents the classic “fast answer, then redundant explanation” problem.
+
+The deep model can still think. It just does not always get to speak.
+
+That is how you get **one-shot answers by default**.
+
+---
+
+## 6. Fix the biggest hidden contradiction: true model separation
+
+There is one architectural contradiction I would treat as critical:
+
+You describe remote mind mode as avoiding reflex contention, but `MINDD_LLM_URL` still defaults to the same `:8088` reflex endpoint.
+
+That means you can have process separation without true cognitive separation.
+
+So I would make this a hard rule:
+
+* if the sidecar points to the same LLM origin as the reflex model,
+* it may do **microtrace only**,
+* but not reflection / brainstorm / dream generation.
+
+Until that is separated, the servant/dreamer split is not real.
+
+This is one of the most important corrections in the whole design.
+
+---
+
+## 7. Redesign the internal monologue into **thoughtlets**
+
+This is where the system becomes alive.
+
+Do **not** make the dreamer longer.
+
+Make it **denser, shorter, more frequent, and more chained**.
+
+### New rule
+
+The private mind should output **micro-thought atoms**, not prose paragraphs.
+
+Each thoughtlet should have:
+
+* a type,
+* an id,
+* an optional parent id,
+* an anchor,
+* a confidence or intensity,
+* the short text itself.
+
+### Compact format
+
+Something like:
+
+```text
+OBSERVE[o41>turn_891|0.83]: User values speed over flourish.
+MEMORY[m12>claim_77|0.71]: Same-origin mind routing risks contention.
+QUESTION[q05>o41|0.68]: Can sidecar own first reply?
+HYPOTHESIS[h19>q05|0.64]: Split fast response from deep response.
+COUNTER[c04>h19|0.52]: Need hard confidence gate for high-stakes asks.
+PLAN[p09>h19|0.58]: Build attention controller first.
+```
+
+This gives you exactly what you asked for:
+
+* easier coloring,
+* easier chaining,
+* easier memory linkage,
+* easier validation,
+* more ideas per minute,
+* less rambling.
+
+### Color mapping
+
+I would map kinds like this:
+
+* `OBSERVE` = cyan
+* `MEMORY` = amber
+* `QUESTION` = violet
+* `HYPOTHESIS` = emerald
+* `COUNTER` = coral
+* `PLAN` = blue
+* `IMAGE` / `METAPHOR` = magenta
+* `AFFECT` = rose
+* `INITIATIVE` = gold
+
+Now the mind stream becomes visually meaningful instead of just “pink tokens.”
+
+---
+
+## 8. Give each lane a fixed thoughtlet shape
+
+Your current lane prompts are good conceptually, but they should be made much tighter and more uniform.
+
+### Reflection
+
+Goal: self-correction and alignment
+
+Output:
+
+* 4 thoughtlets max
+* must include one `QUESTION`
+* must include one `MEMORY` or `OBSERVE`
+* must anchor to last turn, top question, or open loop
+
+### Brainstorm
+
+Goal: move a real problem forward
+
+Output:
+
+* 6 thoughtlets max
+* must include one `HYPOTHESIS`
+* must include one `COUNTER`
+* must include one `PLAN` or `EXPERIMENT`
+* at least one thoughtlet must continue a previous branch
+
+### Dream
+
+Goal: novelty and recombination
+
+Output:
+
+* 8 thoughtlets max
+* must include one `IMAGE` or `METAPHOR`
+* must include one `LINK` between distant anchors
+* must include one `QUESTION` or `SEED`
+* must still anchor to a question, open loop, or user-relevant memory
+
+That last part matters.
+
+**No orphan dreams.**
+
+Dream should wander, but it should not become generic wallpaper.
+
+---
+
+## 9. Replace fixed phase timing with **pressure-based scheduling**
+
+Keep your thirty / one hundred twenty / three hundred second thresholds if you like as broad phase windows, but do not let fixed idle time be the real scheduler.
+
+Use pressure.
+
+### Example pressures
+
+```python
+reflect_pressure = unfinishedness + surprise + correction + recent_retrieval_gap
+brainstorm_pressure = open_loop_value + ambiguity + contradiction + curiosity
+dream_pressure = idle_time * curiosity * (1 - mental_load)
+```
+
+Then choose the lane with the highest pressure that fits the compute budget.
+
+This will feel much more fluid and human than hard phase jumps.
+
+### Also add branch diversity
+
+One strong rule:
+
+* if the same branch has been expanded twice
+* and novelty gain is low,
+* force a branch switch.
+
+That creates the “sea of ideas” effect without rumination.
+
+---
+
+## 10. Make the mind remember **branches**, not just pulses
+
+This is crucial for chaining.
+
+Right now `thoughts` is still pulse-shaped. That is fine for now, but the **content** should become branch-aware.
+
+I would start by storing `thoughts.content` as an array of thoughtlets with ids and parent refs.
+
+Only later, if it proves central, split into `thought_nodes` and `thought_edges`.
+
+### The important rule
+
+Every thoughtlet should anchor to one of:
+
+* `turn_id`
+* `question_id`
+* `open_loop_id`
+* `claim_id`
+* `idea_id`
+* `parent_thought_id`
+
+That creates cumulative inner life.
+
+Without anchors, you do not get continuity. You just get mood.
+
+---
+
+## 11. Use the `questions` table as the root of autonomous cognition
+
+This part of your design is already strong. I would lean into it.
+
+The internal mind should not mainly roam over “recent tokens.”
+
+It should roam over:
+
+* **Questions** for curiosity
+* **Open loops** for responsibility
+* **Ideas** for hypotheses
+* **Claims** for truth tension
+* **Affect** as modulator, not root cause
+
+That is what makes it feel like a being with interests, not just a background autocomplete.
+
+A good simple rule:
+
+* Reflection starts from the last turn.
+* Brainstorm starts from the highest-value open question.
+* Dream starts from one active question plus one distant memory or idea.
+
+That will give the imagination a spine.
+
+---
+
+## 12. Change what the humanity slider controls
+
+This is subtle but very important.
+
+I would **not** let humanity increase public verbosity.
+
+I would let it increase:
+
+* private branch factor,
+* initiative willingness,
+* affect amplitude,
+* prosodic nuance,
+* willingness to revisit open loops,
+* dream frequency.
+
+### New principle
+
+**Humanity should increase inner life, not public word count.**
+
+That is how the agent feels more alive without becoming slower or more exhausting.
+
+---
+
+## 13. Teach the system on **first sentences**, not just final answers
+
+Your flywheel is already one of the most exciting parts of the design.
+
+I would extend it this way:
+
+### Distill three separate artifacts
+
+1. **Best first sentence**
+2. **Best full answer**
+3. **Best continuation delta**
+
+That lets you train the fast responder separately from the deep responder.
+
+### Add new quality signals
+
+I would add labels like:
+
+* `one_shot_accepted`
+* `deepened_useful`
+* `overlong_interrupted`
+* `fast_wrong`
+* `bridge_helpful`
+* `bridge_annoying`
+
+A user barge-in after the core answer is not just an interruption.
+
+It is labeled supervision that you talked too long.
+
+That signal is gold.
+
+---
+
+## 14. Two additional latency wins worth doing
+
+These are lower-level, but they matter.
+
+### Early endpointing
+
+Your `_SILENCE_HANG_SEC = 0.55` is safe, but it is expensive.
+
+I would add:
+
+* a **tentative end** around two hundred to two hundred fifty milliseconds of silence,
+* start ASR/controller work provisionally,
+* cancel if speech resumes,
+* keep final commit closer to current safety margin.
+
+That will materially improve responsiveness.
+
+### Prosodic chunking for TTS
+
+Right now you stream by sentence. That is good, but still leaves latency on the table.
+
+I would move to clause-level chunking:
+
+* comma
+* em-dash
+* colon
+* semicolon
+* long clause boundary
+
+As long as the clause is semantically complete enough to speak naturally.
+
+That makes JARVIS feel faster without changing the model.
+
+---
+
+## 15. What I would implement first
+
+In order:
+
+### First
+
+Build the `AttentionController` with three public response modes:
+
+* fast
+* layered
+* deliberate
+
+### Second
+
+Make the sidecar the default first responder, with hard escalation rules.
+
+### Third
+
+Split context into `FAST_PACK` and `DEEP_PACK`.
+
+### Fourth
+
+Add `SufficiencyStopper` and `UtilityDeltaGate`.
+
+### Fifth
+
+Convert private cognition into structured thoughtlets with ids, parents, anchors, and colors.
+
+### Sixth
+
+Make the same-origin reflex/mind LLM path a hard-disable for deep private pulses.
+
+### Seventh
+
+Train on first sentences and interruption-derived brevity signals.
+
+That order gets you the largest UX gain fastest.
+
+---
+
+## The single-sentence summary
+
+**Make the public agent faster by shrinking the first response, and make the private mind richer by shrinking the unit of thought.**
+
+That is the core move.
+
+The system you want is not one that thinks longer.
+
+It is one that **answers sooner, thinks in smaller pieces, branches more often, remembers those branches, and only speaks the extra thinking when it truly helps.**
+
+The next move I’d make is to spec `attention_controller.py`, `FAST_PACK`, and the thoughtlet protocol before changing any more prompts.
+

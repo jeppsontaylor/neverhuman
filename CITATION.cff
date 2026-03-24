@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use NeverHuman (GARY) in your research, please cite it as below."
+type: software
+title: "NeverHuman (GARY)"
+abstract: >
+  A near-human AI operating system that runs entirely on Apple Silicon.
+  Voice-first, privacy-preserving, with permanent memory, background cognition,
+  and a personality that evolves through interaction.
+version: 0.1.0
+date-released: "2026-03-23"
+license: Apache-2.0
+url: "https://github.com/neverhuman/neverhuman"
+repository-code: "https://github.com/neverhuman/neverhuman"
+keywords:
+  - voice assistant
+  - local AI
+  - Apple Silicon
+  - privacy
+  - cognitive architecture
+  - on-device inference
+  - MoE
+  - RAG
+  - emotional AI

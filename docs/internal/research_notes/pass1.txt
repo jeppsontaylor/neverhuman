@@ -1,0 +1,358 @@
+v3 is much stronger. The remaining unreliability is now mostly a **turn-taking control problem**, not a model-quality problem.
+
+The core bug is this:
+
+**speech start** and **speech end** are being treated too similarly.
+
+They should be completely different decisions.
+
+Speech start should be **fast, high-recall, interrupt-first**.
+Speech end should be **slower, conservative, merge-friendly**.
+
+That one change will fix most of what you’re seeing.
+
+## The two biggest issues in the current design
+
+First, the **interrupt path is still too slow and too coupled**.
+
+You already improved the docs by being honest that 160 ms transport chunks make sub-100 ms server-side interruption impossible without a faster onset lane. That is exactly right. AudioWorklet processing happens on very small render quanta—128 sample-frames by spec today, which at 16 kHz is about 8 ms per block, though MDN says code should check the actual block length instead of hard-coding it. That means you can detect user cut-in locally in roughly 24–32 ms instead of waiting for 160 ms PCM transport chunks. Silero itself is not the bottleneck either; its own README says 30+ ms chunks take under 1 ms on one CPU thread. ([MDN Web Docs][1])
+
+Second, the **endpointer is too eager**.
+
+Your current silence hang is optimized for speed, but user speech has natural pauses, clause breaks, breath pauses, and “thinking while talking” gaps. So the system needs a **candidate end** and a **commit end**, not a single “done speaking” threshold.
+
+## The most important architecture change
+
+Make the runtime explicitly centered around a **Turn Arbiter**.
+
+Right now the logic is spread across VAD, current task cancellation, TTS queueing, mind interruption, and the browser. That works until timing goes sideways. A Turn Arbiter would be the single owner of:
+
+* who currently has the floor
+* what generation is active
+* whether speech onset has been detected
+* whether an utterance is still being captured
+* whether an agent output is stale and must be dropped
+
+I would make the arbiter states:
+
+* `LISTENING`
+* `SPEECH_CANDIDATE`
+* `CAPTURING`
+* `TRAILING_SILENCE`
+* `COMMIT_PENDING`
+* `THINKING`
+* `SPEAKING`
+* `MIND_ACTIVE`
+
+And the critical rule:
+
+**Any speech onset from the user, from any non-capturing state, immediately transitions to CAPTURING and cancels everything else.**
+
+That means:
+
+* stop local playback
+* cancel active TTS queue
+* cancel reflex LLM SSE
+* cancel mind pulse
+* ignore stale output from any old generation
+* keep buffering new audio immediately
+
+## The interrupt path should be two-lane
+
+### Lane A: fast client interrupt
+
+This should become the primary path.
+
+In the AudioWorklet, do a tiny high-recall onset detector using:
+
+* RMS
+* speech-band energy ratio
+* maybe zero-crossing sanity if needed
+
+Run it on **24–32 ms windows** assembled from worklet quanta. When playback is active and onset crosses threshold for 2 windows, do this immediately:
+
+1. stop browser playback locally
+2. send `interrupt_hint`
+3. keep buffering mic audio normally
+
+Do not wait for the server before stopping playback. The browser should cut off audio first, then notify the backend.
+
+Your protocol already has `interrupt_hint`. It should stop being “nice to have” and become the **main interruption mechanism**.
+
+### Lane B: server backup interrupt
+
+Keep server barge-in as the fallback.
+
+The server should still cancel on sustained speech probability from incoming PCM, but this is the backup path, not the main one. With 160 ms chunk cadence, it will always be slower than the client fast hint.
+
+## Your voice path must never wait seconds for the mind
+
+This is the highest-priority code change.
+
+Right now, v3 still has a dangerous production hole:
+
+* `llm_gate` can wait **3 attempts × 2 seconds**
+* the mind daemon can still contend with reflex generation
+* `MINDD_LLM_URL` defaults to the same `8088` LLM origin in the current docs
+
+That means the “remote” mind can still compete with the reflex model, and voice can still wait up to **6 seconds** in the worst case. That is unacceptable for a voice-first system.
+
+So I would change policy immediately:
+
+* **Production default:** `JARVIS_MIND_REMOTE=1`
+* **Production requirement:** `MINDD_LLM_URL` must not point at the reflex 35B server
+* If `_same_llm_origin()` is true in production, either:
+
+  * disable mind pulses, or
+  * fail startup with a loud error
+
+And for embedded fallback:
+
+* set `mind_interrupt` immediately
+* wait once, briefly, maybe **100–150 ms max**
+* if mind still holds anything critical, hard-cancel it
+
+Voice should never be blocked behind background cognition.
+
+## The endpointer should be two-stage
+
+This is the right fix for “recordings are ending too quickly.”
+
+### Stage 1: candidate end
+
+After the user has been speaking, if silence reaches roughly **550–650 ms**, mark a candidate end.
+
+Do **not** send to the LLM yet.
+
+At this moment:
+
+* freeze a snapshot of the current utterance
+* start **speculative ASR**
+* enter `TRAILING_SILENCE`
+
+### Stage 2: commit end
+
+Only finalize the utterance if silence continues for another **250–400 ms** with no speech re-onset.
+
+If speech resumes during this window:
+
+* merge it into the same utterance
+* discard or stale-mark the speculative ASR result
+* continue capturing
+
+That gives you a final silence budget closer to **800–1000 ms** for reliability, while still hiding some of the ASR cost with speculation.
+
+That is the key trick:
+**speculate on ASR, not on the LLM.**
+
+You said you do not want to send to the LLM until you are sure the user is done. Good. Don’t.
+But you can still pre-transcribe the candidate utterance so final latency stays low.
+
+## Make endpointing adaptive
+
+Do not keep a single fixed silence hang forever.
+
+Use a base rule plus extensions:
+
+* if utterance is short, extend commit time
+* if speech resumed once already, extend commit time
+* if user historically pauses mid-sentence, extend commit time
+* if candidate transcript ends with “and”, “but”, “so”, “because”, or a trailing filler, extend commit time
+* if candidate transcript looks complete, allow normal commit
+
+Qwen3-ASR’s official repo says the models support unified streaming/offline inference with a single model, and it also ships a forced aligner. That means a medium-term path to partial-ASR-assisted endpointing is real if you later move beyond the current MLX/offline-style turn handling. ([GitHub][2])
+
+Near term, I would do this without true streaming ASR:
+
+* speculative ASR at candidate end
+* lexical continuation cues from that speculative result
+* adaptive extra hold before commit
+
+That will feel much smarter immediately.
+
+## Add generation IDs everywhere
+
+This is critical for robustness.
+
+Every active turn should have a monotonic `generation_id` or `turn_epoch`.
+
+Tag all of these with it:
+
+* LLM tokens
+* think tokens
+* mind tokens
+* TTS jobs
+* WAV sends
+* filler audio
+* initiative payloads
+
+When the user interrupts:
+
+* increment epoch
+* cancel current generation
+* drop all stale output from older epochs
+
+This prevents:
+
+* ghost audio
+* stale tokens appearing after cancel
+* mind pulses leaking into the next turn
+* filler clips playing after the user has already restarted speaking
+
+Without this, cancellation will always feel partial.
+
+## The mind daemon needs a real cancel path
+
+The current disconnect-based cancellation in `mindd` is good, but it is not enough as the primary mechanism.
+
+Add an explicit:
+
+* `POST /cancel?session_id=...`
+  or
+* per-session cancel registry
+
+Then make the pulse worker check cancellation:
+
+* before LLM call
+* between stream chunks
+* before DB persistence
+* before initiative emission
+
+And production mode should use **JSON-only short pulses**, not raw prose monologue.
+
+That means:
+
+* `JARVIS_MIND_JSON=1` should become default
+* each lane should return structured frames
+* mind tokens should be short and easy to abort
+* no long freeform stream in production
+
+This will reduce parsing brittleness, cut token waste, and make interruption cleaner.
+
+## Filler audio needs stricter rules
+
+Filler audio is good for dead-air masking, but it can make interruption feel worse if it survives too long.
+
+I would change it so filler audio:
+
+* is generation-tagged
+* is capped to something like **120–250 ms**
+* is skipped entirely if a new speech candidate appears
+* is never queued if local playback has already been interrupted
+* is only sent when predicted TTFT is actually long enough to justify it
+
+That keeps the benefit without adding friction.
+
+## The VAD model is not the main problem
+
+Do not spend your next sprint swapping VADs again.
+
+Your current pure numpy spectral + RMS path is already cheap enough. Silero is also extremely fast, but the big bottleneck here is **control-plane timing and endpointer semantics**, not the raw speed of voice activity scoring. ([GitHub][3])
+
+So the right priority order is:
+
+1. fast interrupt hint
+2. strict cancel semantics
+3. two-stage endpointing
+4. speculative ASR
+5. adaptive hang based on user behavior
+
+Not “replace VAD.”
+
+## The best concrete plan
+
+### Phase 1: make interruption actually immediate
+
+Do this first.
+
+Implement:
+
+* client-side fast onset in `processor.js`
+* immediate local playback stop
+* `interrupt_hint` as primary path
+* `generation_id` on all output
+* hard stale-drop on browser and server
+* explicit mindd cancel endpoint
+* production default `JARVIS_MIND_REMOTE=1`
+* production ban on `MINDD_LLM_URL == reflex LLM origin`
+
+This alone will make the system feel dramatically more responsive.
+
+### Phase 2: fix utterance finalization
+
+Then do:
+
+* `SPEECH_CANDIDATE / CAPTURING / TRAILING_SILENCE / COMMIT_PENDING` state machine
+* candidate end at ~600 ms
+* commit end after extra 300 ms
+* speculative ASR at candidate end
+* merge-on-resume behavior
+* adaptive end silence based on short utterances and past pause behavior
+
+This will stop the premature cutoffs without making the system feel sluggish.
+
+### Phase 3: measure the right things
+
+Add metrics for:
+
+* client playback stop latency
+* server cancel latency
+* stale-output leak count
+* resumed-within-1s-after-finalize rate
+* false endpoint rate
+* interrupt source: client hint vs server VAD vs manual
+* speculative ASR reuse rate
+* mean final silence at commit
+* filler interrupted rate
+
+Your current eval harness is already good. These are the missing voice-turn-taking metrics.
+
+## The exact defaults I would start with
+
+As initial tuning, I’d use:
+
+* fast onset window: **32 ms**
+* onset trigger: **2 consecutive windows**
+* pre-roll buffer: **300–500 ms**
+* candidate end silence: **600 ms**
+* commit extension: **300 ms**
+* short utterance total end silence: **900–1100 ms**
+* resume merge window: **1000 ms**
+* mind pulse max output in production: **JSON only, under 120–150 words**
+* embedded mind wait cap for voice: **under 150 ms**, not 6 s
+
+Then tune from real logs.
+
+## One more thing to fix in the docs
+
+There are still a few drift points that matter operationally:
+
+* barge-in frame counts are inconsistent across sections
+* VAD implementation vs tech stack naming still drifts
+* the sidecar story still conflicts with the actual `MINDD_LLM_URL` default
+* “crash-safe” vs “reboot-safe” is now documented correctly in v3; keep that discipline everywhere
+
+That matters, because when timing bugs show up, documentation drift turns into debugging drift.
+
+## Bottom line
+
+The best next version is not a smarter dreamer.
+It is a better **turn-taking machine**.
+
+My strongest recommendation is this:
+
+**Make interruption high-recall and immediate. Make finalization slower and conservative. Never let background cognition compete with the speaking user.**
+
+If you do only four things next, make them these:
+
+1. **Client fast interrupt hint + local playback stop**
+2. **Generation IDs with stale-output dropping**
+3. **Two-stage endpointing with merge-on-resume**
+4. **Production mind isolation from the reflex 35B path**
+
+That will give you the biggest jump in robustness and reliability.
+
+[1]: https://developer.mozilla.org/en-US/docs/Web/API/Web_Audio_API/Using_AudioWorklet?utm_source=chatgpt.com "Background audio processing using AudioWorklet - Web APIs"
+[2]: https://github.com/QwenLM/Qwen3-ASR/blob/main/README.md?utm_source=chatgpt.com "README.md - QwenLM/Qwen3-ASR"
+[3]: https://github.com/snakers4/silero-vad?utm_source=chatgpt.com "Silero VAD: pre-trained enterprise-grade Voice Activity ..."
+

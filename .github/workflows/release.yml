@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Extract changelog
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Extract the relevant section from CHANGELOG.md
+          awk "/^## \[${VERSION#v}\]/{found=1; next} found && /^## \[/{exit} found{print}" CHANGELOG.md > release_notes.txt
+          echo "Release notes:"
+          cat release_notes.txt
+
+      - name: Create release archive
+        run: |
+          git archive --format=tar.gz --prefix=neverhuman-${{ steps.version.outputs.version }}/ HEAD \
+            > neverhuman-${{ steps.version.outputs.version }}.tar.gz
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "NeverHuman ${{ steps.version.outputs.version }}"
+          body_path: release_notes.txt
+          files: |
+            neverhuman-${{ steps.version.outputs.version }}.tar.gz
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}

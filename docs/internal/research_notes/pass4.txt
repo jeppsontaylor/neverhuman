@@ -1,0 +1,317 @@
+v3 is a big step up. The docs are more honest, the retrieval/context work is better, and the system now admits where implementation still lags the target architecture. The two bad behaviors you’re seeing now come from one core issue:
+
+**you still have one audio/control loop trying to do two opposite jobs** — interrupt instantly, but only commit to ASR/LLM when the user is definitely done.
+
+Those should be separate lanes.
+
+## My top-level verdict
+
+The next version should center on an **Audio Arbitration Layer** that owns four things:
+
+1. **fast onset / barge-in**
+2. **conservative end-of-speech commit**
+3. **output cancellation**
+4. **generation/epoch invalidation**
+
+Right now, interruption and utterance-finalization are too coupled, and the fallback/embedded mind path still lets background cognition get too close to the sacred reflex path.
+
+## The most important changes
+
+### 1. Split barge-in from end-of-speech
+
+This is the single biggest fix.
+
+Use **two different detectors with different goals**:
+
+* **Fast onset lane**: optimized for sensitivity and speed. Its job is only to say, “the user started talking, stop the agent now.”
+* **Commit lane**: optimized for precision. Its job is only to say, “the user is really done, now send to ASR/LLM.”
+
+Those two jobs want different thresholds, different smoothing, and different timing.
+
+Your current doc already shows why the old model is failing: 160 ms transport chunks plus multiple consecutive detections can never feel instantaneous on the backend. Silero is fast enough for a sub-30 ms lane; its official repo says 30+ ms chunks take under 1 ms on a CPU thread, ONNX can be even faster, and it supports both 8 kHz and 16 kHz audio. ([GitHub][1])
+
+My recommendation:
+
+* keep a **20 ms local onset detector** in the browser/worklet,
+* transport audio to the server in **80 ms batches**,
+* keep the server endpointing conservative.
+
+### 2. Stop resetting input capture on barge-in
+
+This is probably one of the biggest practical bugs in the current flow.
+
+When the user starts speaking over JARVIS, the system should:
+
+* cancel output,
+* preserve the trigger audio,
+* keep accumulating the new utterance.
+
+It should **not** throw away the speech that caused the interrupt.
+
+So on barge-in, do **not** call a full `vad._reset()` that discards the current speech onset. Instead:
+
+* cancel TTS / LLM / filler / mind work,
+* promote the recent ring-buffer audio into a **new live user segment**,
+* continue accumulating from there.
+
+That one change will make interruptions feel dramatically more reliable and will reduce clipped first words.
+
+### 3. Implement client-first interruption
+
+The client should stop playback **before** the server confirms anything.
+
+The flow I’d use:
+
+1. Browser worklet inspects 20 ms subframes.
+2. If playback is active and onset is detected:
+
+   * stop playback locally immediately,
+   * clear the queued audio,
+   * send `interrupt_hint` with a monotonic timestamp,
+   * continue streaming mic PCM as normal.
+3. Server receives `interrupt_hint` and:
+
+   * sets `interrupt_event`,
+   * sets `mind_interrupt`,
+   * cancels current generation,
+   * invalidates all stale output for the old epoch,
+   * continues ingesting the new speech.
+
+That gives you two wins:
+
+* **perceived** interrupt is nearly instant because the browser kills playback locally,
+* **true** interrupt still happens on the server so old tokens/audio do not leak.
+
+### 4. Add epoch-based stale-drop everywhere
+
+You need a **generation id / epoch id** on every output-producing task.
+
+Every LLM token, sentence, filler clip, mind token, initiative payload, and TTS job should carry the current `epoch_id`.
+
+On any interrupt:
+
+* increment `epoch_id`,
+* cancel live tasks,
+* drop anything still arriving from an older epoch.
+
+That prevents:
+
+* ghost tokens after cancel,
+* late filler audio,
+* late TTS chunks,
+* stale mind speech surfacing after the user already started talking.
+
+This is a high-value reliability fix.
+
+### 5. Make end-of-speech conservative, with a reopen window
+
+Right now recordings are ending too quickly because commit is too eager.
+
+The fix is **not** to make interrupt slower.
+The fix is to make **commit later**.
+
+Use a two-step endpoint:
+
+* **Provisional end** after trailing silence crosses a threshold.
+* **Final commit** only after a short reopen window passes with no resumed speech.
+
+My recommended starting values:
+
+* transport chunk: **80 ms**
+* local subframe: **20 ms**
+* base trailing silence: **0.80 s**
+* reopen window: **0.25–0.30 s**
+* min speech duration: **0.18–0.25 s**
+
+A good dynamic hang rule:
+
+* start at **0.80 s**
+* add **0.10–0.15 s** if the utterance is short,
+* add **0.10–0.15 s** if the last frames are borderline speech/silence,
+* add **0.10 s** if this user historically pauses mid-sentence.
+
+That alone should stop the “I paused briefly and JARVIS jumped in” failure.
+
+### 6. Delay filler audio; never play it instantly
+
+Your current filler audio is probably making the premature-endpoint problem feel worse.
+
+If the system decides too early that the user is done, and then immediately plays “Hmm…” or similar, it creates the exact impression that JARVIS is cutting the user off.
+
+So filler should be:
+
+* **delayed**
+* **conditional**
+* **cancelable**
+
+Recommended behavior:
+
+* schedule filler only if no real token/audio has arrived after **180–250 ms**,
+* suppress filler entirely if endpoint confidence is low,
+* cancel filler immediately on any new onset or `interrupt_hint`,
+* optionally replace spoken filler with a very short nonverbal earcon if you want maximum interruptibility.
+
+## The robust state machine I would use
+
+You need a real speech state machine, not just “speech / silence.”
+
+Use:
+
+* `IDLE`
+* `POSSIBLE_SPEECH`
+* `IN_SPEECH`
+* `TRAILING_SILENCE`
+* `PROVISIONAL_END`
+* `COMMIT_PENDING`
+
+Behavior:
+
+* `POSSIBLE_SPEECH` starts on fast onset.
+* `IN_SPEECH` begins after onset confirmation.
+* `TRAILING_SILENCE` starts when speech probability drops below the **end threshold**.
+* `PROVISIONAL_END` begins after the silence hang elapses.
+* `COMMIT_PENDING` waits through the reopen window.
+* If speech resumes in `TRAILING_SILENCE` or `COMMIT_PENDING`, merge back into the same utterance.
+
+Crucially:
+
+* onset threshold and end threshold must use **hysteresis**
+* interrupt uses **onset rules**
+* commit uses **end rules**
+
+## Make the mind yield for real
+
+This part matters a lot.
+
+Your own v3 doc honestly says that the current implementation still runs background cognition inside `server.py` in some cases and can still contend on `llm_gate`. That is not good enough for production if you want voice to win every time.
+
+My recommendation:
+
+* in production, **force `JARVIS_MIND_REMOTE=1`**
+* if sidecar is unavailable, **disable mind pulses**
+* do **not** fall back to embedded shared-35B mode
+
+Also:
+
+* `_same_llm_origin()` should be a **hard production error**, not just a warning
+* the mind sidecar should use a different small MLX model and never hit the reflex 35B endpoint
+
+The official Qwen3-ASR project still says fully supported streaming inference is currently vLLM-only, but the MLX port now exposes rolling streaming, live mic support, context hints, and energy-based endpointing modes. That makes MLX streaming a good **advisory** signal later, but I would still fix barge-in and endpointing with a dedicated arbitration layer first. ([GitHub][2])
+
+## Recommended architecture changes, in order
+
+### Immediate fixes
+
+Do these first.
+
+* Implement browser-side `interrupt_hint` and local playback stop.
+* Stop resetting VAD/input state on barge-in.
+* Add `epoch_id` and stale-drop.
+* Raise trailing silence from `0.55` to about `0.80` and add a reopen window.
+* Delay filler audio.
+* Make remote mind the default; disable embedded fallback in production.
+
+### Next sprint
+
+These will make the whole system much more stable.
+
+* Reduce transport chunk size from **160 ms to 80 ms**.
+* Keep 20 ms subframes inside the worklet.
+* Create a dedicated `cancel_current_generation()` routine that cancels:
+
+  * LLM task
+  * TTS queue
+  * filler timer
+  * mind pulse
+  * initiative surfacing
+* Split the current VAD into:
+
+  * `FastOnsetDetector`
+  * `EndpointDetector`
+  * `SpeechSegmentBuilder`
+
+### After that
+
+These make it excellent.
+
+* Add a cooperative cancel token inside `infer` so generation can stop between decode steps instead of only at higher layers.
+* Add advisory shadow streaming ASR for endpointer refinement, not for hard gating.
+* Move the spool off `/tmp` if you want reboot-safe buffering. The FHS says programs must not assume `/tmp` survives between invocations, while `/var/tmp` is intended for temporary files preserved across reboots. ([Freedesktop Specifications][3])
+
+## Concrete tuning changes I would make now
+
+I would start with this exact profile:
+
+* `CHUNK_SZ`: **1280** samples (**80 ms**) instead of 2560
+* browser onset subframe: **20 ms**
+* client onset trigger: **2 consecutive 20 ms subframes**
+* server fallback barge-in: **2 consecutive 80 ms chunks** or internal 20 ms slices
+* `_SILENCE_HANG_SEC`: **0.80**
+* reopen window: **0.25**
+* `_MIN_SPEECH_SEC`: **0.20**
+* filler delay: **0.20 s**
+* filler suppression if first real token/sentence arrives first
+* `JARVIS_MIND_REMOTE=1` by default
+* embedded mind fallback: **off in production**
+
+## Clean up the doc/runtime mismatches
+
+I would also fix these immediately because they hide bugs:
+
+* `BARGEIN_FRAMES` is **2** in constants but section 4.10 still describes **3**.
+* Tech Stack lists **Silero VAD**, but Process 1 describes spectral VAD as default and Silero as upgrade path.
+* Process 3 still describes the sidecar target architecture, but the honest note says current implementation is partially embedded.
+
+These inconsistencies make debugging harder than it needs to be.
+
+## Add better metrics
+
+Your current eval harness is good, but it needs three more metrics for this exact problem:
+
+* **false end rate**: user resumed speaking within 500 ms of commit
+* **clipped-onset rate**: first user word missing after barge-in
+* **ghost-output rate**: stale token/TTS/filler surfaced after interrupt
+
+Also split barge-in latency into:
+
+* **local playback stop**
+* **server cancel acknowledged**
+* **old-generation output fully drained**
+
+That is much more honest and much more useful than one blended number.
+
+## Optional fallback: WebRTC VAD for the fast lane
+
+If your custom spectral onset still feels noisy, WebRTC VAD is a valid fallback for the fast lane. The Python wrapper documents a strict interface: mono 16-bit PCM at supported rates, with frames of exactly 10, 20, or 30 ms. ([GitHub][4])
+
+I would still keep your current spectral/RMS logic for cheap local onset hints, but WebRTC VAD is a reasonable backup option if you want a very simple binary front end.
+
+## The short version of the plan
+
+The right next version is:
+
+* **fast local onset**
+* **conservative server commit**
+* **no VAD reset on barge-in**
+* **epoch-based stale-drop**
+* **delayed/cancelable filler**
+* **remote mind only**
+* **smaller transport chunks**
+* **stronger observability**
+
+If you implement just those changes, the system will feel much more solid immediately:
+
+* interruption will feel instant,
+* the user will stop getting cut off,
+* new speech will stop losing its first words,
+* and the background mind will stop getting in the way of the voice path.
+
+The single most important sentence in this whole redesign is:
+
+**Interrupt early, commit late, and never throw away the speech that caused the interrupt.**
+
+[1]: https://github.com/snakers4/silero-vad "GitHub - snakers4/silero-vad: Silero VAD: pre-trained enterprise-grade Voice Activity Detector · GitHub"
+[2]: https://github.com/QwenLM/Qwen3-ASR/blob/main/README.md "Qwen3-ASR/README.md at main · QwenLM/Qwen3-ASR · GitHub"
+[3]: https://specifications.freedesktop.org/fhs/latest-single?utm_source=chatgpt.com "Filesystem Hierarchy Standard"
+[4]: https://github.com/wiseman/py-webrtcvad "GitHub - wiseman/py-webrtcvad: Python interface to the WebRTC Voice Activity Detector · GitHub"
+

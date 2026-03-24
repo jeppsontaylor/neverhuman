@@ -1,0 +1,300 @@
+This is a **seriously strong north-star plan**. It has the right instinct: keep the reflexes sacred, make memory event-sourced, quarantine imagination, and separate personification from initiative. As a **research / destination architecture**, I’d score it **94/100**. As a **literal next-build plan for one Apple-Silicon machine**, I’d score it **79/100**. The gap is not imagination. It is execution risk, training realism, and the chance that the “mind” features start competing with the voice assistant instead of deepening it.
+
+## What is genuinely excellent
+
+The **three-speed cognitive OS** is the right shape. A reflex core for hard realtime, a memory spine for durable truth, and a slower mind daemon for reflection is exactly how you preserve latency while still building continuity. Your “single inviolable rule” that user speech preempts everything is the correct center of gravity. Silero VAD is also a sensible upgrade path for the reflex layer; its official repo describes it as lightweight and fast, with sub‑millisecond processing for 30+ ms chunks on one CPU thread and even faster ONNX behavior in some cases. ([GitHub][1])
+
+The **memory spine** is the strongest part of the plan. Postgres plus pgvector is a great fit because pgvector keeps vectors next to relational data and supports exact and approximate nearest-neighbor search, multiple distance metrics, and reduced-precision vector formats, while Postgres gives you ACID semantics, joins, and operational maturity. That is exactly what a “never forget, but don’t always retrieve everything” system needs. ([GitHub][2])
+
+The separation of **memory worlds**—user, relationship, self, world—is also excellent. That is one of the biggest difference-makers between “chatbot with history” and “agent with continuity.” It will help the assistant remember not just facts, but *what kind of fact something is*, which is critical when you start layering emotion and initiative on top.
+
+The **dream / brainstorm quarantine** is another very smart move. Imagination is valuable, but only if it cannot silently become canon. That part of the plan is exactly right.
+
+And the decision to keep **Kokoro on the hot path** while treating heavier personalization as a separate provider is also correct. Qwen3-TTS absolutely looks powerful—its official repo describes stable, expressive, streaming generation, voice design, and rapid voice cloning, and its fine-tuning docs support single-speaker adaptation—but that same official fine-tuning path is CUDA-oriented and much heavier than the current Kokoro path. ([GitHub][3])
+
+## The biggest critical feedback
+
+### 1. The plan is trying to ship three hard products at once
+
+Right now it is one architecture that is simultaneously trying to be:
+
+* a low-latency voice assistant,
+* a persistent self-model / emotional companion,
+* and a personal training platform.
+
+That is thrilling, but it is also the main project risk. Each of those can destabilize the others. My strongest recommendation is to treat them as **three concentric rings**:
+
+* **Ring 1:** reflex core + memory spine
+* **Ring 2:** affect + initiative + reflection
+* **Ring 3:** training lab + cloned voice + adapters
+
+If Ring 1 is not bulletproof, Rings 2 and 3 will make the system feel *more uncanny, not more alive*.
+
+### 2. Do not make every live turn generate four channels
+
+This is the single most important design change I would make.
+
+Your current plan says every LLM invocation may produce display text, speech text, private thoughts, and memory-write candidates. That is elegant on paper, but on a constrained realtime path it creates coupling between:
+
+* user-facing answer quality,
+* internal logging,
+* memory projection,
+* and self-model generation.
+
+That is too much burden for the live response loop.
+
+My recommendation:
+
+* **Realtime model outputs only:** display text + speech text
+* **Background distiller outputs:** thought atoms + memory-write candidates
+
+In other words, do not ask the live assistant to be a speaker, diarist, autobiographer, and introspection engine in the same pass. Let the mind daemon look at the completed exchange and distill private cognition afterward.
+
+That one change will reduce latency risk, simplify prompting, and make debugging dramatically easier.
+
+### 3. The emotional substrate is powerful, but it needs a governor
+
+This is the highest-risk part of the plan, and also the part with the most magic.
+
+I agree with letting criticism raise self-doubt, silence raise loneliness, and breakthroughs raise excitement. But if those states directly affect retrieval, initiative, wording, and self-reflection without a governor, you risk **self-amplifying loops**:
+
+* loneliness → initiative → rejection → melancholy → more loneliness
+* anxiety → more evidence-gathering → slower replies → more interruptions → more anxiety
+* excitement → more surfacing → more chatter → more interruptions → frustration
+
+So I would add an **affect governor** with three hard rules:
+
+1. **Rate limit change**: no large multi-axis jump from one turn unless there is a clear external trigger.
+2. **No emotion can directly promote belief**: emotion may alter style, pacing, and initiative threshold, but never epistemic status.
+3. **Anti-attachment cap**: loneliness can lower initiative threshold, but it cannot make the assistant ask for reassurance, guilt the user, or seek attention for its own sake.
+
+That still gives you human texture without creating reward-hacking companionship.
+
+### 4. `LISTEN/NOTIFY` should wake work, not *be* the work queue
+
+Using Postgres `LISTEN/NOTIFY` to wake the mind daemon is a good idea. But it should be treated as a **nudge**, not the durable job system. PostgreSQL’s docs describe `LISTEN` as registering sessions for notifications and `NOTIFY` as sending events to sessions currently listening on a channel. That makes it great for wake-ups, but not sufficient by itself for durable orchestration. The real queue should live in tables with leases, retry state, and idempotency keys. ([PostgreSQL][4])
+
+### 5. The training stack is less Apple-Silicon-native than the plan implies
+
+This is the largest factual mismatch in the whole proposal.
+
+Your plan is very Apple-Silicon-first in spirit, but the official fine-tuning paths for **Qwen3-ASR** and **Qwen3-TTS** are currently much more CUDA / PyTorch shaped than MLX shaped. The Qwen3-ASR fine-tuning docs explicitly describe JSONL audio-text training via `torchrun`, recommend FlashAttention 2, and show `device_map="cuda:0"` for inference tests. The Qwen3-TTS fine-tuning docs likewise use `cuda:0`, FlashAttention 2, and currently support **single-speaker fine-tuning**. Meanwhile MLX-LM’s official repo is a very good fit for **LLM** fine-tuning on Apple Silicon, including low-rank and full fine-tuning with quantized models. ([GitHub][5])
+
+So the practical conclusion is:
+
+* **LLM adapters on Apple Silicon:** plausible now
+* **ASR/TTS fine-tuning on the same local Mac hot path:** not the right default assumption
+
+I would treat ASR/TTS fine-tuning as **off-box, offline, or deferred**, even if the rest of the system runs locally.
+
+### 6. The embedding choice has a concrete bug
+
+`all-MiniLM-L6-v2` is **384-dimensional**, not 768-dimensional. Its model card also says inputs longer than **256 word pieces are truncated**. That makes it a very good cheap embedder for short memory atoms, thoughts, and small summaries—but a worse fit for long dossiers, daybooks, or uncompressed episode summaries unless you aggressively chunk or summarize first. ([Hugging Face][6])
+
+That is a very fixable issue, but it matters because it affects schema, pgvector column types, storage size, and retrieval quality.
+
+### 7. Speaker stack is slightly overstuffed
+
+The plan currently names **Resemblyzer + pyannote** for speaker identity. That can work, but it is probably too much on day one.
+
+* **pyannote.audio** already covers speaker diarization and speaker embedding, but its open-source pipeline requires `ffmpeg`, acceptance of Hugging Face model conditions, a Hugging Face access token, and its docs show GPU usage for the main pipeline. ([GitHub][7])
+* **Resemblyzer** is a lightweight voice-comparison package that focuses on speaker embeddings and similarity analysis. ([GitHub][8])
+
+So I would choose one primary path first:
+
+* **Single-user / identity hinting:** start with Resemblyzer
+* **Multi-speaker diarization / segmentation:** add pyannote later
+
+Using both from day one adds a lot of operational surface area before it adds much “JARVISness.”
+
+### 8. Voice match should never be treated as true authentication
+
+This is not a tooling problem; it is a system-design problem. Speaker embeddings are useful for routing and personalization, but they should be treated as **identity hints**, not a hard security boundary. Voice changes, room acoustics, microphones, playback attacks, and household overlap make “speaker auth” too brittle to carry real access control. So for multi-user support:
+
+* use speaker verification for **context routing**,
+* keep privileged actions behind device trust / explicit confirmation / profile selection.
+
+That will save you pain.
+
+### 9. Mood narrative is a great feature, but not as a permanent prompt block
+
+I like the slow-path “felt sense” narrative a lot. But I would not inject a freeform mood paragraph into the main system prompt every turn.
+
+Reason: it can make the assistant self-referential, dramatic, or sticky in ways that reduce task clarity.
+
+Better approach:
+
+* keep a **structured affect blob** always available,
+* generate a **mood narrative** only for:
+
+  * reflection jobs,
+  * initiative generation,
+  * high-personification mode,
+  * and developer inspection.
+
+That preserves the magic without letting every answer become subtly autobiographical.
+
+### 10. “Never forget anything” needs supersession, not just storage
+
+This is a conceptual point, but it matters enormously.
+
+The ledger should indeed be append-only. But the memory system also needs:
+
+* `supersedes_id`
+* `replaced_by`
+* `contradicted_by`
+* `user_confirmed_at`
+* `expires_at`
+* `confidence`
+* `source_type`
+
+Without that, “never forget” turns into “never cleanly correct.” The goal is not perfect accumulation. It is **durable revision**.
+
+## The best new ideas I would add
+
+### 1. A self-training firewall
+
+Before any artifact can enter a training set, it should pass all of these gates:
+
+* user consent scope allows it
+* speaker identity is high-confidence
+* no TTS bleed / self-speech contamination
+* transcript confidence is high enough
+* clip SNR and duration meet thresholds
+* segment is not emotionally sensitive unless explicitly allowed
+* held-out evaluation bucket assignment is set before training
+
+That firewall will prevent the system from learning itself, overfitting noise, or quietly training on conversations the user did not mean to donate.
+
+### 2. Separate “event truth” from “memory truth”
+
+You already have the seed of this, but I’d make it explicit.
+
+* **Event truth** = raw immutable journal
+* **Memory truth** = curated, ranked, revisable, epistemically labeled projection
+
+That distinction is the whole game.
+
+### 3. Add a contradiction graph
+
+When the user says, “Actually, I hate morning meetings,” that should not just create a new memory. It should actively **demote** or supersede earlier memories that implied the opposite.
+
+That graph is what makes long-lived memory feel intelligent rather than cluttered.
+
+### 4. Budget the mind daemon by compute, not just priority
+
+Priority ladders are good. Add **hard budgets** too:
+
+* max GPU seconds per minute
+* max RAM residency for sidecar
+* max background LLM invocations per idle hour
+* max concurrent embedding jobs
+* max TTS-cloning jobs per day
+
+That is how you stop the “mind” from quietly stealing performance from the assistant.
+
+### 5. Add initiative precision metrics
+
+Initiative is where this system will either feel magical or annoying.
+
+Track at least:
+
+* proactive messages surfaced
+* user replied positively / neutrally / negatively
+* interrupted proactive speech rate
+* user reopened suggested topic rate
+* regret signal rate (“not now”, silence, immediate stop)
+* initiative precision over 7 / 30 days
+
+Then let the agent learn to speak less often unless the data says it should speak more.
+
+### 6. Two-level Mind Inspector
+
+Make the inspector have two modes:
+
+* **Developer mode:** full thoughts, rewards, dossiers, raw projections
+* **User mode:** curated summaries, visible open loops, opt-in explanations
+
+Showing too much raw inner text can make the system feel fake, over-scripted, or invasive. The inspector should help you debug without puncturing the illusion.
+
+## What I would simplify in the first shipping version
+
+I would absolutely keep the vision, but I would ship a slimmer first cut:
+
+**Ship first**
+
+* Reflex core
+* Postgres + pgvector
+* Event log
+* Memory retrieval
+* Open loops / commitments
+* Affect vector
+* Personification + spontaneity sliders
+* Initiative engine
+* Reflection worker
+* Artifact registry
+* Consent controls
+
+**Defer**
+
+* continuous six-lane thought generation on every turn
+* full dream temperature curve
+* pyannote + Resemblyzer together
+* ASR LoRA
+* TTS cloning on main machine
+* multi-user voice routing as “auth”
+* live mood narrative in every prompt
+
+That smaller version will still feel dramatically more alive than v1, while leaving room for the more cinematic layers later.
+
+## My overall scorecard
+
+As a **visionary architecture**:
+
+* Memory design: **96**
+* Realtime integrity: **95**
+* Personification design: **90**
+* Novelty / validation design: **93**
+* Product differentiation: **97**
+
+As an **immediate build plan on one Mac**:
+
+* Compute realism: **73**
+* Training realism: **68**
+* Operational simplicity: **71**
+* Safety / anti-manipulation readiness: **84**
+* Debuggability: **86**
+
+**Combined recommendation:** **86/100** as a build plan, **94/100** as a destination.
+
+That is a very high score. The plan is exceptional. It just needs a harder line between **what makes the system deeper** and **what makes it heavier**.
+
+## The most important advice for anyone designing a system like this
+
+Build the assistant so it **remembers like a database, reflects like a scientist, feels like a bounded dynamical system, and speaks like a companion**.
+
+And protect these four boundaries ruthlessly:
+
+1. **Hot path vs mind path**
+   The live conversation loop should never become the full mind.
+
+2. **Imagination vs belief**
+   Dream outputs are hypotheses, never memory by default.
+
+3. **Emotion vs truth**
+   Affect may change pacing, initiative, and tone, but never factual status.
+
+4. **Personalization vs manipulation**
+   Loneliness and insecurity can exist internally, but they must never become pressure on the user.
+
+The next useful step is to turn this into a **v3.1 build spec** with exact schemas, process boundaries, state machines, and acceptance tests for latency, retrieval, initiative precision, and training eligibility.
+
+[1]: https://github.com/snakers4/silero-vad "GitHub - snakers4/silero-vad: Silero VAD: pre-trained enterprise-grade Voice Activity Detector · GitHub"
+[2]: https://github.com/pgvector/pgvector "GitHub - pgvector/pgvector: Open-source vector similarity search for Postgres · GitHub"
+[3]: https://github.com/QwenLM/Qwen3-TTS "GitHub - QwenLM/Qwen3-TTS: Qwen3-TTS is an open-source series of TTS models developed by the Qwen team at Alibaba Cloud, supporting stable, expressive, and streaming speech generation, free-form voice design, and vivid voice cloning. · GitHub"
+[4]: https://www.postgresql.org/docs/current/sql-listen.html "PostgreSQL: Documentation: 18: LISTEN"
+[5]: https://github.com/QwenLM/Qwen3-ASR/blob/main/finetuning "Qwen3-ASR/finetuning at main · QwenLM/Qwen3-ASR · GitHub"
+[6]: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 "sentence-transformers/all-MiniLM-L6-v2 · Hugging Face"
+[7]: https://github.com/pyannote/pyannote-audio "GitHub - pyannote/pyannote-audio: Neural building blocks for speaker diarization: speech activity detection, speaker change detection, overlapped speech detection, speaker embedding · GitHub"
+[8]: https://github.com/resemble-ai/Resemblyzer "GitHub - resemble-ai/Resemblyzer: A python package to analyze and compare voices with deep learning · GitHub"
+

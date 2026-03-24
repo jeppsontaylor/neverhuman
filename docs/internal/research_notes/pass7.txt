@@ -1,0 +1,340 @@
+The main problem is that JARVIS is still using one mechanism for **two different jobs**:
+
+**job one:** “the user just started talking, kill everything now”
+**job two:** “the user is probably finished, now commit the utterance to ASR/LLM”
+
+Those must be split.
+
+If you keep them coupled, you get exactly the behavior you’re seeing: interruption feels late, while endpointing feels too eager.
+
+## The core fix
+
+Build a dedicated **Floor Controller** and make it the highest-priority subsystem in the whole stack.
+
+It should own one state machine only:
+
+`IDLE → AGENT_ACTIVE → USER_PENDING → USER_SPEAKING → USER_FINALIZING → THINKING → AGENT_ACTIVE`
+
+The critical transition is:
+
+**any speech onset while JARVIS is thinking, speaking, dreaming, reflecting, or generating immediately moves the floor to `USER_PENDING` and cancels all agent work before the utterance is finalized.**
+
+That means:
+
+* **interrupt on onset**
+* **finalize on trailing silence**
+
+Not the same threshold. Not the same timers. Not the same code path.
+
+## The fastest, most robust interruption path
+
+Your current architecture already hints at the right answer with `interrupt_hint`, but it should become the primary fast lane.
+
+### 1) Do interruption in the browser first
+
+The browser has the fastest possible view of speech onset. `AudioWorkletProcessor.process()` runs on the audio rendering thread for each rendering quantum, and current browsers call it with blocks that are currently `128` frames long, though MDN explicitly says you must not assume that stays fixed forever. On a `16 kHz` input context, that is about `8 ms` per current quantum, which is far better control granularity than your `160 ms` transport chunks. Also, `AudioScheduledSourceNode.stop()` stops playback immediately if called with no time or `0`. ([MDN Web Docs][1])
+
+So the browser should do this whenever JARVIS is **thinking** or **speaking**:
+
+* run a tiny onset detector in the worklet on every render quantum
+* if onset is detected for 2-of-3 recent quanta, immediately:
+
+  * stop local playback
+  * clear the local audio queue
+  * send `interrupt_hint` to the server with timestamp + current turn epoch
+  * keep recording mic audio continuously
+
+This is how you get the subjective “instant cut-off” feeling. The server no longer needs to win the race to stop the old answer.
+
+### 2) Keep transport chunking, but decouple control from transport
+
+You do **not** need to send `20–40 ms` PCM packets over WebSocket to get fast interruption.
+
+Keep your `160 ms` content slabs for efficient upload if you like. But add a separate control lane:
+
+* **control lane:** local onset detection + `interrupt_hint`
+* **content lane:** normal PCM upload + server endpointing
+
+That gets you fast barge-in without blowing up WebSocket message count.
+
+## The server must cancel by epoch, not by hope
+
+Right now you have `interrupt_event`, `current_task.cancel()`, and some queue resets. That is necessary, but not sufficient. Robust interruption needs **epoch invalidation**.
+
+Add:
+
+```python
+turn_epoch: int
+floor_state: Enum
+active_turn_tg: asyncio.TaskGroup | None
+```
+
+On any `interrupt_hint` or server-detected speech onset:
+
+1. increment `turn_epoch`
+2. set `floor_state = USER_PENDING`
+3. set `interrupt_event`
+4. set `mind_interrupt`
+5. cancel the active turn `TaskGroup`
+6. purge any queued TTS/filler/initiative items from older epochs
+7. ignore any later token/audio/log events carrying an old epoch
+
+That last rule is huge. It prevents zombie audio, zombie tokens, and stale initiative after interruption.
+
+Every outbound thing should carry an epoch:
+
+* `token`
+* `think_token`
+* `mind_token`
+* `initiative`
+* filler audio
+* TTS audio chunks
+
+For audio, I would stop sending raw naked WAV frames and instead add a tiny binary header or a small JSON envelope carrying `epoch` and `chunk_ix`. The browser should drop anything not matching `currentEpoch`.
+
+## Use `TaskGroup` for every turn
+
+Every user turn should become one structured cancellation tree:
+
+* filler task
+* LLM stream task
+* sentence/TTS producer task
+* TTS sender task
+* maybe retrieval audit/log task
+
+Python’s docs are clear that task cancellation is cooperative: `CancelledError` is raised at the next await point, and if code catches and suppresses it, cancellation can effectively be defeated. They also note that `TaskGroup` and `asyncio.timeout()` rely on cancellation internally and can misbehave if cancellation is swallowed. ([Python documentation][2])
+
+So I would do two things:
+
+* refactor `_generate_and_speak()` into a per-turn `TaskGroup`
+* audit every coroutine in the hot path to ensure `CancelledError` is re-raised after cleanup
+
+Especially audit:
+
+* `llm_stream()`
+* filler-audio send path
+* parallel TTS worker
+* `mind_loop` / remote pulse caller
+* any `httpx` stream readers
+
+## Remove voice-path waiting on the mind
+
+This is the biggest architecture issue still left in v3.
+
+Your own doc is honest: today the mind still runs as an embedded task in `server.py` in some modes and can contend on `llm_gate`. That is incompatible with “voice always wins.”
+
+Also, `asyncio.wait_for()` cancels the awaited task when timeout happens and waits until cancellation actually completes, so total wait may exceed the nominal timeout. By contrast, `asyncio.wait()` with a timeout does **not** cancel pending tasks automatically. ([Python documentation][2])
+
+So my recommendation is blunt:
+
+**Production mode should forbid embedded mind.**
+
+Make this rule:
+
+* if `JARVIS_MIND_REMOTE != 1`, disable reflection/brainstorm/dream pulses entirely
+* if the remote mind points to the same 35B origin as the reflex LLM, disable brainstorm/dream and only allow O(1) microtrace
+
+Voice should never wait three times for two seconds trying to take the lock back from background cognition. That is exactly the kind of rare-but-awful failure users remember.
+
+## Add real backend cancellation to `infer`
+
+This is probably the most important missing piece on the backend.
+
+If the server stops reading SSE but `infer` keeps decoding the old request, you still lose:
+
+* GPU/Metal time
+* SSD expert paging bandwidth
+* cache residency
+* TTFT on the next real turn
+
+So add explicit cancellation to the local LLM server:
+
+* generate `request_id` per chat completion
+* expose `POST /v1/cancel/{request_id}` or equivalent
+* on interrupt, server calls cancel immediately
+* inference loop checks cancel flag between decode steps and exits early
+
+Without this, cancellation is only cosmetic.
+
+Do the same for the mind sidecar, though it already has a better story because you’ve built disconnect cancellation into `mindd`.
+
+## Fix endpointing separately, and bias it conservative
+
+Your second problem is premature finalization. That is mostly endpointing.
+
+Right now the architecture still leans on a trailing silence hang around `0.55 s`, and that is too aggressive for human pauses in reflective speech.
+
+The fix is:
+
+### 1) Aggressive onset, conservative end
+
+Use different logic for start vs end.
+
+**Speech start**
+
+* low latency
+* 2-of-3 short positive windows
+* includes preroll buffer
+
+**Speech end**
+
+* high confidence only
+* longer trailing silence
+* cancel finalize if speech resumes before timer expires
+
+### 2) Switch the endpoint detector to subwindows
+
+Silero VAD remains a strong fit here. The official repo says it processes a `30+ ms` chunk in under `1 ms` on a single CPU thread, and the current V5 release says the ONNX VAD now uses fixed windows only: `256` samples at `8 kHz` and `512` samples at `16 kHz`, with state carried between chunks. ([GitHub][3])
+
+That gives you a good structure:
+
+* keep `160 ms` transport chunks if you want
+* inside each chunk, slice into `5 × 512-sample` windows
+* feed those windows through the endpointer
+* maintain trailing silence on `32 ms` decisions, not `160 ms` blocks
+
+This won’t by itself give sub-100ms interrupt, because transport still arrives every `160 ms`. But it **will** make end-of-speech decisions much cleaner and less trigger-happy.
+
+### 3) Raise the default silence hang now
+
+As a practical immediate hotfix, I would raise endpoint hang to something like:
+
+* base: `700–800 ms`
+* extend to `900–1100 ms` for:
+
+  * utterances longer than ~1.5–2 seconds
+  * recent internal pauses inside same utterance
+  * unstable trailing energy / continuation feel
+
+And because you already have filler audio, you can afford to be slightly more conservative on finalization without the experience feeling dead.
+
+That is the key trade: once interruption is instant, endpointing can prioritize **not cutting the user off**.
+
+## The best endpointing state machine
+
+I would replace the current single VAD accumulator with this:
+
+```text
+LISTENING
+  -> SPEECH_CANDIDATE
+  -> IN_SPEECH
+  -> MAYBE_DONE
+  -> FINALIZE
+  -> LISTENING
+```
+
+Rules:
+
+* `SPEECH_CANDIDATE` requires 2-of-3 short windows positive
+* entering `IN_SPEECH` attaches 400–600 ms of preroll
+* `MAYBE_DONE` starts a silence timer, but does not commit yet
+* any new positive window before timer expiry returns to `IN_SPEECH`
+* `FINALIZE` only happens after stable silence windows for full hang duration
+
+This alone will solve most “recordings end too quickly” behavior.
+
+## Audit and log the actual mic settings
+
+This matters more than most people realize.
+
+The browser may not apply your requested mic constraints exactly. MDN’s constraints docs are explicit that `applyConstraints()` expresses preferences/requirements, while `getSettings()` gives you the actual values currently in use. `MediaTrackSettings` includes `echoCancellation`, `noiseSuppression`, `autoGainControl`, `latency`, and `sampleRate`. ([MDN Web Docs][4])
+
+So on mic init, log:
+
+* `echoCancellation`
+* `noiseSuppression`
+* `autoGainControl`
+* `latency`
+* `sampleRate`
+* `channelCount`
+
+Why this matters:
+
+* AGC can make simple RMS thresholding unstable
+* noise suppression can clip soft trailing speech
+* echo cancellation can help with self-speech, but can also change the acoustic envelope
+
+I would keep echo cancellation on by default, but tune thresholds from **actual** settings, not assumed settings.
+
+## Separate initiative from user utterances
+
+Right now the “voice-initiative bridge” is still too close to the user path.
+
+Do **not** inject initiative into the same semantic queue as raw user speech without a stronger envelope. Otherwise, on interruption, stale initiative can survive in the same machinery that should be prioritizing the user.
+
+Use a distinct queue item type:
+
+```python
+TurnInput(
+    source="user_audio" | "initiative" | "text_override",
+    epoch=...,
+    payload=...,
+)
+```
+
+And on any user speech onset:
+
+* purge all pending `initiative` items
+* cancel all active initiative speech immediately
+* require initiative to reacquire permission later
+
+User floor ownership must dominate.
+
+## Immediate changes I would make before anything else
+
+If I were hardening this system right now, these would be the first moves.
+
+**First**, make browser-side `interrupt_hint` real:
+
+* local onset detector in `processor.js`
+* immediate `stopAllAudio()`
+* send `interrupt_hint` with timestamp and epoch
+
+**Second**, add `turn_epoch` everywhere and drop stale outputs.
+
+**Third**, replace per-turn loose tasks with a `TaskGroup`.
+
+**Fourth**, increase endpoint silence hang now to bias against premature finalization.
+
+**Fifth**, make `JARVIS_MIND_REMOTE=1` effectively mandatory in production, and disable embedded mind pulses when remote is unavailable.
+
+**Sixth**, add a real cancel path to `infer`.
+
+## The acceptance criteria I would enforce
+
+Do not ship the next revision until these are measured:
+
+* no stale token/audio from old epoch after interrupt
+* local playback stop p95 < 100 ms from speech onset
+* server cancel acknowledgement p95 < 150 ms from `interrupt_hint`
+* old turn resource drain p95 < 300 ms
+* false-finalize rate below agreed threshold on a pause-heavy speech corpus
+* resumed-within-800ms pauses do **not** finalize
+* dream/reflect/initiative tasks are always cancelled on speech onset
+* no lock-wait path where voice waits behind background cognition
+
+## Bottom line
+
+The best fix is not “tune VAD harder.”
+
+It is this architectural split:
+
+**speech onset steals the floor immediately**
+**trailing silence commits the utterance conservatively**
+
+Then back it with:
+
+* browser fast interrupt
+* epoch-based invalidation
+* structured cancellation
+* remote-only background cognition in production
+* explicit LLM cancel
+* conservative endpointing with short subwindows
+
+That combination will make JARVIS feel much more solid, much more interruptible, and much less likely to cut users off too early.
+
+[1]: https://developer.mozilla.org/en-US/docs/Web/API/AudioWorkletProcessor/process "AudioWorkletProcessor: process() method - Web APIs | MDN"
+[2]: https://docs.python.org/3/library/asyncio-task.html "Coroutines and tasks — Python 3.14.3 documentation"
+[3]: https://github.com/snakers4/silero-vad "GitHub - snakers4/silero-vad: Silero VAD: pre-trained enterprise-grade Voice Activity Detector · GitHub"
+[4]: https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamTrack/applyConstraints "MediaStreamTrack: applyConstraints() method - Web APIs | MDN"
+

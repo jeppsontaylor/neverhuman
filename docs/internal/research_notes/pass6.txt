@@ -1,0 +1,534 @@
+v3 is strong, but the bad behavior comes from one missing concept:
+
+**the user floor is not first-class yet.**
+
+Right now interruption is spread across VAD, `interrupt_event`, `current_task`, `llm_gate`, mind cancellation, browser playback stop, and queue resets. That means the system can hesitate, disagree with itself, or clip the user.
+
+The next version should make one rule operational, not just aspirational:
+
+**any real user speech onset immediately transfers the floor to the user.**
+
+That single rule fixes both problems you called out:
+
+* the agent not stopping fast enough
+* recordings ending too quickly
+
+## My headline assessment
+
+The architecture is about **95/100**.
+The current **interrupt path** is more like **72/100**.
+The current **endpointing path** is about **68/100**.
+
+The good news is that this is fixable without throwing away the design.
+
+---
+
+## What is actually going wrong
+
+There are six concrete issues in the current system.
+
+First, **the full assistant turn is not one cancellable unit**.
+`current_task` mainly covers LLM+TTS, but the real user-facing turn is:
+
+`ASR → context pack → LLM → TTS → browser playback`
+
+If the user speaks during ASR, or while waiting on `llm_gate`, or while filler audio is queued, cancellation is incomplete or late.
+
+Second, **the mind path can still contend with the voice path**.
+Your docs say sidecar mind, but the current reality still allows embedded mode and even remote mind pointed at the same 35B origin. As long as `MINDD_LLM_URL` can equal the reflex LLM origin, “voice has absolute priority” is not truly enforced.
+
+Third, **barge-in is still chunk-bound**.
+At 160 ms chunks, “two” or “three” consecutive detections are hundreds of milliseconds, not near-instant. The docs are now more honest, which is good, but the runtime design still needs a real fast onset path.
+
+Fourth, **endpointing is single-stage and too eager**.
+You are trying to use one silence threshold both to notice likely completion and to commit the utterance. Those are different jobs. Speech start should be fast. Speech end should be conservative.
+
+Fifth, **interrupt currently resets too much**.
+Any path that does a hard `vad._reset()` during barge-in risks losing the beginning of the user’s new utterance. You need to cancel the assistant without discarding capture state.
+
+Sixth, **user turns and initiative turns are too close together**.
+If initiative text can enter the same queueing path as user utterances, then user speech does not truly dominate the system.
+
+---
+
+## The best architecture change
+
+### Make “floor ownership” explicit
+
+Add this to each session:
+
+```python
+floor_owner: Literal["none", "user_tentative", "user_committed", "agent"]
+turn_epoch: int
+current_turn_task: asyncio.Task | None   # ASR -> LLM -> TTS as one unit
+current_mind_task: asyncio.Task | None
+capture_state: Literal["idle", "speech", "end_pending"]
+pending_commit_handle: asyncio.Handle | None
+```
+
+This becomes the real control plane.
+
+### The invariant
+
+On **any confirmed speech onset**:
+
+1. Browser stops playback immediately.
+2. Server increments `turn_epoch`.
+3. Server cancels **all non-user work** for older epochs:
+
+   * current assistant turn
+   * filler audio
+   * TTS queue items
+   * mind pulse
+   * pending initiative
+4. Capture continues without losing the onset.
+5. Any stale tokens/audio/thoughts from older epochs are ignored.
+
+That is the system you want.
+
+---
+
+## The most important change for robustness
+
+### Replace “interrupt” with **floor transfer**
+
+Current mental model:
+
+* interrupt current output
+* then maybe start listening
+
+Better model:
+
+* user speech tentatively owns the floor immediately
+* assistant loses speaking rights immediately
+* all background cognition becomes subordinate immediately
+* utterance finalization happens later, conservatively
+
+That means the moment speech starts, the system behaves as if the user is speaking, even before the utterance is fully committed.
+
+---
+
+## The best interrupt design
+
+## 1) Add a browser fast path
+
+Keep 160 ms transport chunks for normal audio upload.
+But inside the AudioWorklet, also compute a tiny local onset detector on **20–30 ms subframes** while the assistant is speaking.
+
+When local onset fires:
+
+* stop playback locally at once
+* send `interrupt_hint`
+* continue normal PCM upload
+
+So the browser becomes the **instant stop path**, while the server remains the **truth path**.
+
+That gives you:
+
+* fast perceived interruption
+* no need to flood the network with smaller audio chunks
+* far better UX
+
+### Recommended behavior
+
+* Detect onset on 20 ms subframes
+* Require 2 of the last 3 subframes above a speech threshold
+* Use speech-band energy + RMS, not raw amplitude alone
+* Only enable this aggressive path while assistant audio is active
+
+Your new contract becomes:
+
+* **client stop latency**: target under 100 ms
+* **server cancel latency**: best effort, should follow immediately
+* **new speech capture**: continues regardless of cancel completion
+
+---
+
+## 2) Cancel the entire turn, not just `_generate_and_speak()`
+
+Right now, the cancellable unit is too small.
+
+Create a single task per assistant turn:
+
+```python
+current_turn_task = asyncio.create_task(process_turn(epoch, utterance))
+```
+
+Where `process_turn()` includes:
+
+* ASR
+* context pack compilation
+* LLM stream
+* TTS queueing
+* done/final bookkeeping
+
+Every stage checks `epoch` after each await.
+
+```python
+async def process_turn(epoch, utterance):
+    transcript = await asr.transcribe(utterance)
+    if epoch != session.turn_epoch:
+        return
+
+    ctx = await build_context_pack(...)
+    if epoch != session.turn_epoch:
+        return
+
+    async for ev in llm_stream(...):
+        if epoch != session.turn_epoch or interrupt_event.is_set():
+            break
+        ...
+```
+
+This solves a huge class of stale output bugs.
+
+### Important honesty about ASR
+
+If ASR is still running in a thread pool, cancellation may not physically abort inference mid-call. That is okay short-term, **as long as stale results are discarded**. Long-term, true ASR preemption needs its own service/process.
+
+---
+
+## 3) Remove shared LLM contention from production
+
+This is non-negotiable.
+
+In production:
+
+* `JARVIS_MIND_REMOTE=1` should be required
+* `MINDD_LLM_URL` must point to a **different** model/origin than the reflex 35B
+* if `MINDD_LLM_URL == LLM_URL`, startup should fail or disable mind pulses
+
+A warning is not enough.
+
+As long as the mind can hit the same 35B backend, voice preemption will always be compromised.
+
+### My exact recommendation
+
+* Reflex LLM: keep 35B on `8088`
+* Mind daemon: separate 0.8B–4B sidecar endpoint on another port or direct MLX model
+* Embedded mind mode: dev only, not production
+
+Also, if mind is truly remote and separate, the reflex path should not wait on `llm_gate` at all. The current `3 x 2s` loop is a good emergency fallback, but it is not voice-loop policy.
+
+---
+
+## The best endpointing design
+
+This is the second big fix.
+
+### Use **asymmetric turn-taking**
+
+Speech start should be fast.
+Speech end should be conservative.
+
+That means:
+
+* **fast onset**
+* **sticky in-speech state**
+* **two-stage end-of-turn**
+* **resume merge before commit**
+
+## 1) Add hysteresis
+
+Use different thresholds for:
+
+* entering speech
+* staying in speech
+* ending speech
+
+Example shape:
+
+* enter speech at high confidence
+* remain in speech at lower confidence
+* only consider end after sustained silence
+
+That prevents chatter and premature cutoffs.
+
+## 2) Add `END_PENDING`
+
+State machine:
+
+```text
+IDLE
+→ SPEECH
+→ END_PENDING
+→ COMMIT
+```
+
+Behavior:
+
+* after sustained silence, enter `END_PENDING`
+* do **not** send to ASR/LLM yet
+* start a short commit grace timer
+* if speech resumes, cancel commit and merge the utterance
+* if grace expires, finalize and dispatch
+
+This is the single best fix for “recordings are ending too quickly.”
+
+### Recommended starting values
+
+* `soft_end_silence`: about **550–650 ms**
+* `commit_grace`: about **250–350 ms**
+* total default finalization: about **800–950 ms**
+* extend finalization for long or bursty utterances
+
+A good rule:
+
+```python
+base_soft_end = 0.60
+grace = 0.25
+
+if utterance_duration > 3.0 or burst_count >= 3:
+    grace += 0.15
+```
+
+That gives the user room to pause naturally without the system jumping the gun.
+
+## 3) Keep capture alive through interrupt and end-pending
+
+Do **not** hard reset VAD on barge-in.
+Instead add something like:
+
+```python
+vad.preempt_for_user()
+```
+
+Meaning:
+
+* assistant state resets
+* rolling prebuffer is preserved
+* current capture continues
+* onset is not lost
+
+This is much safer than `vad._reset()`.
+
+---
+
+## The best VAD design for this system
+
+You already have two good ingredients:
+
+* fast spectral + RMS logic
+* Silero available
+
+Use them asymmetrically:
+
+### Fast path
+
+Use **spectral + RMS** for:
+
+* local interrupt hint
+* quick user onset
+* barge-in
+
+### Conservative path
+
+Use **Silero or a more conservative server-side commit rule** for:
+
+* end-of-turn finalization
+* end-pending commit decisions
+
+This split is ideal for your use case:
+
+* very fast reaction at speech start
+* much more reliable “are they really done?” logic at speech end
+
+---
+
+## Separate user work from initiative work
+
+Right now the voice-initiative bridge is clever, but it is too close to user input.
+
+Do not let initiative share the same first-class queue semantics as real user speech.
+
+Use separate queues or typed items:
+
+```python
+user_turn_queue
+initiative_queue
+system_queue
+```
+
+or
+
+```python
+QueueItem(kind="user_audio" | "initiative_text" | "system_text", priority=...)
+```
+
+Then enforce this rule:
+
+**Any user speech onset purges all pending initiative/system items.**
+
+Also:
+
+* initiative can only surface when `floor_owner == none`
+* initiative can never survive a new `user_tentative` floor transfer
+* initiative text should never block a new user turn
+
+That makes the system socially sane.
+
+---
+
+## Add generation IDs everywhere
+
+This is the easiest way to kill stale output.
+
+Every assistant generation gets a `gen_id`.
+
+Add `gen_id` to:
+
+* `token`
+* `think_token`
+* `mind_token`
+* `initiative`
+* `stop_audio`
+* `done`
+* `final`
+
+For audio, add explicit control messages:
+
+* `audio_begin {gen_id}`
+* `audio_end {gen_id}`
+
+Browser behavior:
+
+* only render text for active `gen_id`
+* ignore all binary/audio frames unless an active `audio_begin` has established the current gen
+* after interrupt, ignore any stale late-arriving frames
+
+This alone will make interruptions feel much cleaner.
+
+---
+
+## Filler audio needs to be demoted a bit
+
+Right now filler audio is useful for dead air, but it can worsen turn-taking if it fires too aggressively.
+
+I would change it to:
+
+* **never** play before utterance commit
+* only play if:
+
+  * endpoint is committed
+  * no new speech onset has happened
+  * no first LLM token has appeared after about **120–150 ms**
+* filler belongs to the same `gen_id` as the assistant turn
+* filler must be instantly cancellable on `interrupt_hint`
+
+That keeps the benefit without creating false starts.
+
+---
+
+## The single biggest implementation change
+
+### Introduce a `SessionTurnController`
+
+Right now too much logic is distributed across server.py helpers and flags.
+
+Create a per-session controller with a small explicit API:
+
+```python
+class SessionTurnController:
+    def on_speech_onset(...)
+    def on_audio_chunk(...)
+    def on_soft_endpoint(...)
+    def on_commit_timeout(...)
+    def start_turn(...)
+    def cancel_assistant(...)
+    def purge_non_user_work(...)
+```
+
+This controller owns:
+
+* `turn_epoch`
+* `floor_owner`
+* `capture_state`
+* `current_turn_task`
+* `current_mind_task`
+* queue purging
+* generation IDs
+
+This will make the system much more reliable than adding more flags to the monolith.
+
+---
+
+## The best immediate plan
+
+## P0 — fix the dangerous parts first
+
+Do these before anything else.
+
+1. Make `current_turn_task` wrap **ASR → context pack → LLM → TTS**.
+2. On any user speech onset, cancel `current_turn_task`, not just generation.
+3. Preserve rolling capture on interrupt; do not hard reset VAD.
+4. Make initiative a separate queue and purge it on any user speech.
+5. Fail hard if mind and reflex share the same LLM origin in production.
+6. Remove `llm_gate` waits from the reflex path when mind is truly remote.
+
+That will produce the biggest reliability jump immediately.
+
+## P1 — fix turn-taking
+
+1. Add browser-side `interrupt_hint` from 20–30 ms subframes.
+2. Add `END_PENDING` plus commit grace.
+3. Add hysteresis for speech start vs speech hold vs speech end.
+4. Add `floor_owner = user_tentative | user_committed`.
+
+This fixes both “interrupts too slow” and “recordings end too quickly.”
+
+## P2 — fix stale outputs and observability
+
+1. Add `gen_id` everywhere.
+2. Add `audio_begin/audio_end`.
+3. Add new metrics:
+
+   * onset → local stop
+   * onset → server cancel
+   * onset → mind cancel complete
+   * stale token/audio drop count
+   * false endpoint rate
+   * resume-before-commit rate
+
+## P3 — make the architecture honest
+
+1. Make remote mind daemon mandatory for prod.
+2. Make sidecar use a separate model for real.
+3. Add explicit `/cancel/{request_id}` for mind pulses in addition to disconnect cancellation.
+4. Add deadline-limited context pack retrieval with cached fallback.
+
+---
+
+## The tests you should add next
+
+These should be mandatory.
+
+1. User speaks during assistant TTS playback → local stop happens immediately.
+2. User speaks during LLM streaming → no more stale tokens/audio are rendered.
+3. User speaks during ASR → stale transcript/result is discarded.
+4. User speaks while mind is dreaming → pulse is cancelled and never surfaces.
+5. User pauses mid-sentence for 300–500 ms → utterance does **not** commit.
+6. User resumes during commit grace → audio is merged into same utterance.
+7. Pending initiative exists, then user speaks → initiative is dropped.
+8. Same-origin mind/reflex configuration in prod → startup error or mind disabled.
+9. Filler audio queued, then user speech begins → filler stops instantly and does not contaminate turn flow.
+10. Old binary audio arrives after interrupt → browser ignores it by `gen_id`.
+
+---
+
+## The one-sentence summary
+
+The best next version is not “more features.”
+It is this:
+
+**make user speech onset an immediate system-wide floor transfer, and make utterance commit a separate, slower, conservative decision.**
+
+That is the cleanest, most robust way to get:
+
+* instant interruption
+* no clipped user turns
+* safe dreaming/reflection
+* reliable proactive behavior
+* and a system that actually feels responsive under pressure
+
+The current design is close. The floor model, two-stage endpointing, full-turn cancellation, and true mind separation are the missing pieces.
+

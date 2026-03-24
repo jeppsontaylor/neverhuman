@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  test:
+    name: Test · macOS ARM
+    runs-on: macos-14   # Apple Silicon (M1)
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff pytest pytest-asyncio
+          pip install -e . --no-deps 2>/dev/null || pip install -r gary/requirements.txt
+
+      - name: Lint (ruff)
+        run: ruff check gary/ --select E,F,W,I --ignore E501
+
+      - name: No JARVIS strings in gary/
+        run: |
+          COUNT=$(grep -ri 'jarvis' gary/ --include="*.py" --include="*.sh" --include="*.html" --include="*.js" --include="*.yml" --include="*.sql" --include="*.md" | grep -v __pycache__ | grep -v 'AGENT.md' | wc -l | tr -d ' ')
+          echo "Found $COUNT jarvis string(s)"
+          if [ "$COUNT" -gt "0" ]; then
+            grep -rni 'jarvis' gary/ --include="*.py" --include="*.sh" --include="*.html" --include="*.js" --include="*.yml" --include="*.sql" --include="*.md" | grep -v __pycache__ | grep -v 'AGENT.md'
+            exit 1
+          fi
+
+      - name: No JARVIS filenames
+        run: |
+          COUNT=$(find gary/ -iname "*jarvis*" | wc -l || true)
+          echo "Found $COUNT jarvis filename(s)"
+          if [ "$COUNT" -gt "0" ]; then
+            find gary/ -iname "*jarvis*"
+            exit 1
+          fi
+
+      - name: Run tests
+        run: |
+          cd gary
+          PYTHONPATH=. python -m pytest testing/ -q --tb=short
+        env:
+          GARY_SKIP_AUTOLAUNCH: "1"
+
+  security:
+    name: Security scan (bandit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install bandit
+      - run: bandit -r gary/ -ll -x gary/testing/ --quiet

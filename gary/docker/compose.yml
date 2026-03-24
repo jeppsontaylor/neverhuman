@@ -1,0 +1,48 @@
+# NeverHuman Docker Compose — Postgres + pgvector
+#
+# Usage:
+#   cd gary/docker && docker compose up -d
+#
+# Data persists in the named volume 'neverhuman_pgdata' across restarts.
+# Artifacts shared via bind mount at /tmp/neverhuman.
+#
+# To connect from gary python:
+#   DATABASE_URL=postgresql://neverhuman:${GARY_DB_PASS}@localhost:5432/neverhuman
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: neverhuman-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: neverhuman
+      POSTGRES_USER: neverhuman
+      POSTGRES_PASSWORD: ${GARY_DB_PASS:-changeme}
+    volumes:
+      # Named volume — persistent across container rebuilds
+      - pgdata:/var/lib/postgresql/data
+      # Init schema on first launch
+      - ../memory/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      # Shared artifact staging area (host ↔ container)
+      - /tmp/neverhuman:/tmp/neverhuman
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U neverhuman -d neverhuman"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Performance tuning for Apple Silicon (32GB RAM typical)
+    command: >
+      postgres
+        -c shared_buffers=256MB
+        -c effective_cache_size=1GB
+        -c maintenance_work_mem=128MB
+        -c work_mem=8MB
+        -c random_page_cost=1.1
+        -c max_connections=20
+        -c log_min_duration_statement=200
+
+volumes:
+  pgdata:
+    name: neverhuman_pgdata

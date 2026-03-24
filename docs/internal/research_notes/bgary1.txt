@@ -1,0 +1,518 @@
+Your updated plan is excellent, but I would not score it 100.
+
+## Scores
+
+Against the original ask:
+
+| Plan                        |      Score | Why                                                                               |
+| --------------------------- | ---------: | --------------------------------------------------------------------------------- |
+| My pooled recommendation    | **95/100** | Strong architecture and direction, but less execution-specific                    |
+| Your updated JARVIS v4 plan | **97/100** | Much more concrete and implementation-ready, but still has a few structural risks |
+
+Why your v4 is not 100:
+
+* it still under-specifies **race-proof state control**
+* it still lets the self-edit system potentially **judge its own homework**
+* it improves ambient cognition a lot, but it still needs a stronger **quest substrate** to make the inner life genuinely interesting over time
+* blue-green swap details for **live WebSocket/audio sessions** are still risky
+
+So: **this is the best plan so far**, but I would make several direct changes before building it.
+
+# The most direct changes I would make
+
+## 1. Make the floor machine event-driven, not field-mutation-driven
+
+This is my biggest change.
+
+Right now the plan still reads like:
+
+* `supervisor.floor = USER_ACQUIRING`
+* `supervisor.pending_user_turn_id = uuid4()`
+* `supervisor.floor = ASR_PENDING`
+
+That will work in the happy path, but it is vulnerable to stale async tasks and out-of-order events.
+
+I would change `TurnSupervisor` into a pure event reducer:
+
+```python
+supervisor.apply(Event.MIC_ONSET)
+supervisor.apply(Event.VAD_SPEECH_START)
+supervisor.apply(Event.TRANSCRIPT_READY, turn_id=...)
+supervisor.apply(Event.FOREGROUND_GEN_START, turn_id=...)
+supervisor.apply(Event.TTS_STARTED, turn_id=...)
+supervisor.apply(Event.TTS_FINISHED, turn_id=...)
+supervisor.apply(Event.BARGE_IN, reason="worklet_onset")
+```
+
+And add:
+
+* `floor_epoch: int`
+* `attention_lease_id: UUID | None`
+
+Every async task captures the current epoch or lease when it starts.
+If the epoch changes underneath it, it is stale and must abort without mutating state or sending audio.
+
+That prevents exactly the class of bug where an old mind task or old TTS task “comes back from the dead” and changes the floor after the user has already reclaimed it.
+
+### Why this matters
+
+Your current problem is not just bad logic. It is almost certainly also a **race problem**.
+
+## 2. Add `answer_started` and `turn_closed` as separate concepts
+
+Right now `pending_user_turn_id` is doing too much.
+
+I would split user-turn handling into:
+
+* `pending_user_turn_id`
+* `answer_started_at`
+* `turn_closed_at`
+
+Rules:
+
+* a transcript creates an **obligation**
+* the obligation is satisfied when the user receives a real response start
+* the floor is not released until the turn is fully closed
+
+That means:
+
+* **initiative blocking** keys off `pending_user_turn_id`
+* **background eligibility** keys off `turn_closed_at` / `last_attention_release`
+
+This avoids muddy semantics like “do I still owe the user something if I already started answering but audio is still playing?”
+
+## 3. Move invariants and replay harness into Phase 0, not Phase 4
+
+This is a sequencing change, but an important one.
+
+Do not wait until Phase 4 to add `spec/invariants.yaml` and replay harnesses.
+
+I would move these forward:
+
+* `spec/invariants.yaml`
+* 16:43 bad-session regression fixture
+* floor sovereignty tests
+* raw-thought leak tests
+* orphaned-turn tests
+
+These should land **with the floor rewrite**, not later.
+
+Otherwise you will refactor the hardest part of the system without the exact guardrails you need most.
+
+## 4. Add a real Quest Board
+
+This is the biggest missing organ in the updated plan.
+
+Your updated plan has:
+
+* roles
+* agenda broker
+* `quest_id` in frames
+* recent quest threads in self-manifest
+
+That is good, but I would make quests explicit and first-class.
+
+Add a `quests` table:
+
+```sql
+CREATE TABLE quests (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,              -- science|system_repair|user_project|memory|experiment
+    summary TEXT NOT NULL,
+    mission_axis TEXT NOT NULL,      -- science|system|user|self
+    status TEXT NOT NULL,            -- open|active|blocked|validated|abandoned|closed
+    salience REAL DEFAULT 0.5,
+    evidence_refs JSONB DEFAULT '[]',
+    next_action TEXT,
+    surfaced_count INT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+```
+
+And maybe `quest_events` too.
+
+Then force every non-trivial ambient pulse to:
+
+* attach to an existing quest, or
+* create a new quest
+
+### Why this matters
+
+This is what will make JARVIS’s inner life actually feel alive.
+
+Without a Quest Board, the system can still become a tidy task router.
+With a Quest Board, it develops continuity:
+
+* “I’m still working on the VAD ghost buffer bug.”
+* “I’ve kept circling back to vacuum decay and public fascination with existential cosmology.”
+* “I’ve noticed a pattern in when you ask science vs self-model questions.”
+
+That is much closer to what you originally asked for.
+
+## 5. Add Thought Escrow
+
+You already separate `inner_voice` from `initiative_candidate.draft`. Good.
+
+I would go one step further and add an explicit **Thought Escrow** stage:
+
+1. lane produces raw pulse
+2. validator checks it
+3. approved frames go to escrow
+4. initiator decides if anything is surfaceable
+5. renderer creates display/speech-safe output
+
+This can be implemented as:
+
+* a table,
+* an in-memory queue,
+* or just a pipeline stage.
+
+But the design principle matters:
+
+**private cognition should not be one serialization step away from speech**
+
+That is the key thing your current system got wrong.
+
+## 6. Keep audible initiative in shadow mode longer
+
+Your updated plan correctly fixes initiative routing. Good.
+
+But given the behavior in your logs, I would still keep **audible initiative disabled** until these are true:
+
+* floor violation rate = 0 over replay + real sessions
+* no raw-thought leaks
+* psychologizing false positives under a very low threshold
+* self-query accuracy is high
+* initiative helpfulness rate clears a minimum bar in shadow mode
+
+So:
+
+* allow initiative candidate generation
+* allow initiative scoring
+* allow initiative logging
+* maybe show it in the Mind Inspector
+* but do not let it speak yet
+
+This is the fastest way to avoid reintroducing uncanny behavior while the rest of the mind gets better.
+
+## 7. Compile the self-model from machine truths first, docs second
+
+This is a very important correction.
+
+Your updated plan says `self_manifest.json` is compiled from Bibles + runtime.
+
+I would change that to:
+
+**compiled from runtime probes + manifests + code atlas + live config first**
+and then use the Bibles only as descriptive annotations
+
+Why:
+
+* docs drift
+* code moves faster than prose
+* self-queries must be literally true
+
+So the trust hierarchy should be:
+
+1. runtime introspection
+2. machine manifests
+3. code atlas
+4. docs as annotations
+
+Also add `self_model_confidence` or at least explicit provenance so JARVIS can distinguish:
+
+* “live now”
+* “configured but disabled”
+* “planned but not yet wired”
+
+That will make self-answers much more trustworthy.
+
+## 8. Protect the judge from being edited
+
+This is probably the biggest safety concern in the entire self-edit design.
+
+Right now you protect:
+
+* `apps/forged/*`
+* `spec/invariants.yaml`
+* `memory/spool.py`
+* `docker/*`
+
+That is not enough.
+
+I would also protect, or at least externally anchor:
+
+* `spec/module_contracts.yaml`
+* replay fixtures
+* the guardian regression suite
+* `edit_policies.yml`
+* change playbooks
+* baseline eval harness configs
+* rollback controller
+* deploy decision logic
+
+Otherwise the system can quietly evolve toward:
+
+* weaker tests
+* easier contracts
+* looser policies
+* easier promotion
+
+In other words, it can **teach itself to pass**.
+
+### My recommended addition
+
+Create a small immutable **Guardian Suite** outside the candidate worktree:
+
+* protected tests
+* protected fixtures
+* protected policy manifests
+* protected replay harness
+
+The candidate build must pass the guardian suite that it cannot edit.
+
+That is a major missing piece.
+
+## 9. Ban auto schema migrations and shared-DB incompatibilities
+
+This is another serious risk.
+
+Blue-green with one shared Postgres means:
+
+* A and B must both be able to run against the same schema during overlap
+* self-edits must not perform destructive or incompatible migrations
+
+I would explicitly mark as human-only:
+
+* schema migrations
+* destructive backfills
+* changes that require both A and B to disagree about DB semantics
+
+At minimum:
+
+* additive migrations only
+* backward-compatible reads/writes only
+* no auto-edit of schema during Forge until much later
+
+This is a real place where an otherwise good self-edit system can brick itself.
+
+## 10. Change A/B cutover semantics: drain or maintenance, not live mid-turn switch
+
+Your Phase 8 is strong, but this is the point I would tighten most.
+
+Do not try to transparently switch an active voice session from reflex-A to reflex-B in the middle of a turn.
+
+For first implementation, do one of these:
+
+* cut over only in `MAINTENANCE`
+* or pin existing WebSocket sessions to A and send new sessions to B
+* or drain A and only switch after reconnect
+
+The risky part is not HTTP. It is:
+
+* WebSocket binary audio ordering
+* `audio_start` / `stop_audio`
+* client epoch state
+* in-flight TTS / ASR / interrupt signals
+
+A mid-session proxy switch is where subtle audio bugs are born.
+
+So my recommendation:
+
+* **first version**: maintenance-window reconnect or session drain
+* **later**: true hot session migration if you still want it
+
+## 11. Add a safe-mode fallback
+
+This is missing and I think it matters a lot.
+
+If the system detects repeated invariant breaches, it should fall back automatically to:
+
+* reflex-only
+* no ambient mind
+* no initiative
+* no Forge
+* self-query still works
+* logs clearly explain why
+
+For example:
+
+* 3 floor violations in one session
+* orphaned-turn watchdog tripped
+* malformed mind pulses beyond threshold
+* repeated audio protocol violations
+
+Then JARVIS should degrade gracefully instead of staying weird.
+
+That is very important in a system this ambitious.
+
+## 12. Use a smaller controller for self-query, routing, and Forge planning
+
+This is a performance concern.
+
+Your plan puts foreground deliberation inside the reflex path and uses the same LLM for deep meta-self / repair / self-edit requests.
+
+That is conceptually fine, but I would not make the big 35B do all of it.
+
+I would use a smaller control model or deterministic logic for:
+
+* intent routing
+* change classification
+* self-model Q/A scaffolding
+* Forge planning scaffolding
+
+Then let the large reflex model do final user-facing phrasing when needed.
+
+Why:
+
+* protects latency
+* reduces weirdness
+* makes self-queries feel crisp
+* reduces resource contention
+
+Meta-self answers should often be mostly retrieval + templating, not giant generative reasoning.
+
+## 13. Generate `test_map` from coverage, not only manifests
+
+Your Code Atlas is good.
+
+I would make `test_map` come from:
+
+* actual coverage runs
+* import graphs
+* symbol ownership
+* hand-authored overrides
+
+Not just static manifests.
+
+Otherwise the test map will drift and Forge will either:
+
+* run too few tests
+* or overrun itself by running too many
+
+Coverage-derived ownership will make the atlas much more reliable.
+
+## 14. Add patch budgets
+
+Another practical control I’d add:
+
+* max files touched
+* max lines changed
+* max cross-module risk
+* max time in Forge
+* escalation threshold if patch scope grows
+
+For example:
+
+* green-zone auto edits: tiny
+* yellow-zone edits: bounded
+* multi-module or cross-process edits: require stronger approval or human mode
+
+This will stop a “simple request” from becoming a repo-wide rewrite.
+
+## 15. Make “show your thoughts” a curated summary, not raw chain-of-thought
+
+This matters directly to your original prompt.
+
+You want JARVIS to feel like it has visible internal dialogue. I agree.
+
+But I would not expose raw `inner_voice` directly, even with a `mind_disclosure_level=full`.
+
+Instead expose:
+
+* active quests
+* current questions
+* repair hypotheses
+* recent validated thoughts
+* blocked initiative reasons
+* what it is trying to improve
+
+So the Mind Inspector becomes:
+
+* **Active Quests**
+* **Recent Repairs**
+* **Questions I’m Holding**
+* **Experiments**
+* **Possible Initiatives**
+* **Why I Did Not Surface This**
+
+That will feel much more real and much less messy.
+
+# Major concerns in the updated plan
+
+## The biggest concern
+
+**The system can still race itself.**
+
+Until you add:
+
+* event-driven floor transitions
+* floor epochs
+* attention leases
+* stale-task invalidation
+
+…you can still get ghosts.
+
+## Second biggest concern
+
+**Forge can still weaken its own constraints** unless you add a protected guardian suite outside the editable surface.
+
+## Third biggest concern
+
+**The inner life may still feel competent but not alive** unless you add a proper Quest Board.
+
+The current plan gives you better thoughts.
+A Quest Board gives you continuity.
+
+## Fourth biggest concern
+
+**Blue-green with live WebSocket voice is trickier than it sounds.**
+
+Proxying chat HTTP is easy.
+Proxying an active duplex audio session with epoch semantics is not.
+
+## Fifth biggest concern
+
+**Docs-as-self-model can lie.**
+
+JARVIS should describe what is actually live, not what the Bible says it intends to become.
+
+# What might break
+
+The main breakpoints I see are:
+
+* stale async task mutates floor after a new turn already started
+* orphaned initiative candidate speaks because eligibility changed after queueing
+* self-edit candidate passes because it weakened local tests/manifests
+* A/B swap breaks `audio_start` / `tts_finished` ordering
+* B and A disagree about shared DB schema during overlap
+* `test_map` points to the wrong tests after refactors
+* meta-self answers become slow if they always use the 35B path
+* the Mind Inspector becomes noisy if it shows raw cognitive debris instead of curated quest summaries
+
+# The changes I would prioritize first
+
+If you only apply five deltas to the latest plan, I would choose these:
+
+1. **Event-reducer `TurnSupervisor` + `floor_epoch` + attention leases**
+2. **Move invariants/replay harness into Phase 0**
+3. **Add immutable Guardian Suite outside Forge’s editable scope**
+4. **Add Quest Board as first-class memory substrate**
+5. **Keep initiative shadow-only until the new architecture proves itself**
+
+# Final verdict
+
+Your updated plan is the best version so far.
+It is strong enough that I would start building from it.
+
+But I would make these three headline changes before calling it definitive:
+
+* make floor control **race-proof**
+* make self-edit validation **uncheatable**
+* make the mind’s continuity **quest-based**
+
+With those added, I think the plan becomes substantially better than my previous pooled recommendation.
+
+**Updated score after those changes: 99/100.**
+

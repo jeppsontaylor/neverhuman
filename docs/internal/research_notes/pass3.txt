@@ -1,0 +1,443 @@
+I studied v3 closely. The good news is that the system is now strong enough that the bad behavior is coming from a few specific control-path decisions, not from the overall architecture.
+
+The two real problems are:
+
+1. **speech start is still too tied to 160 ms transport chunks**, so interruption is later than it feels like it should be, and
+2. **speech end is still being decided too eagerly**, so natural pauses get mistaken for turn completion.
+
+The single biggest improvement is to stop treating “user started speaking” and “user is definitely done speaking” as the same detector. They should be two different subsystems with different latency goals.
+
+## What is wrong right now
+
+There are four concrete causes.
+
+First, the architecture is still partly quantized by the browser’s 160 ms upload chunk. That is fine for **shipping audio**, but it is not fine for **interrupt decisions**. The browser’s AudioWorklet currently processes audio in 128-frame render quanta, which at 16 kHz is about 8 ms, so you can detect onset much earlier than your 160 ms transport cadence. MDN also explicitly warns not to hard-code the render block size forever, and to inspect the actual sample array length. ([MDN Web Docs][1])
+
+Second, the current flow still mixes **capture state** and **response state** too much. The architecture still shows barge-in paths that call `vad._reset()`. That is exactly how you lose the first syllable of the user’s interruption and end up with recordings that feel clipped. Interrupting playback and resetting capture are not the same operation.
+
+Third, the voice path can still get hung up behind background cognition because your docs honestly say the current implementation may still run mind work in `server.py` and contend on the same `llm_gate`. The current “three attempts × two seconds” lock-acquire logic is far too long for a voice-first system. If voice ever waits two seconds for a background pulse, the architecture is violating its own core rule.
+
+Fourth, you are using one endpointer for two jobs. A good voice assistant should be:
+
+* **aggressive on speech start**
+* **conservative on speech end**
+
+Right now the system is trying to be fast at both with one hang timer, and that causes premature cuts.
+
+## The best architectural fix
+
+The next version should introduce a **dual-path turn-taking stack**:
+
+### 1) Fast onset path
+
+Its only job is to answer one question:
+
+**“Did the user just start speaking?”**
+
+This path should live primarily on the client and operate on 20–30 ms subframes, not 160 ms chunks. If you want a classic VAD backend, WebRTC-style VAD interfaces are designed around 10, 20, or 30 ms mono PCM frames. ([GitHub][2])
+
+You do not need full client-side ASR here. You just need enough confidence to:
+
+* duck or stop playback locally
+* send `interrupt_hint` immediately
+* raise a server-side cancel epoch
+* begin/continue capture without resetting buffers
+
+If you prefer to keep the onset logic lightweight, Silero-class VAD performance is easily fast enough for this role; the Silero repo says a 30+ ms chunk takes under 1 ms on a single CPU thread, with ONNX sometimes faster. ([GitHub][3])
+
+### 2) Conservative endpointer
+
+Its only job is to answer:
+
+**“Am I sure the user is done?”**
+
+This path can be slower and more cautious. It should use:
+
+* hysteresis
+* a trailing-silence hold
+* a short grace window
+* pause-bridging
+* dynamic hang time
+
+This is the right fix for recordings ending too early.
+
+## The most important design change
+
+Split your runtime into **two independent state machines** per session:
+
+### Capture FSM
+
+`idle → pre_speech → in_speech → maybe_end → commit_grace → finalized`
+
+### Response FSM
+
+`idle → thinking → speaking → aborting`
+
+The capture FSM should never be reset just because the response FSM was interrupted.
+
+That means on barge-in:
+
+* stop playback immediately
+* cancel LLM/TTS/mind tasks immediately
+* **do not clear the rolling prebuffer**
+* **do not reset the utterance accumulator**
+* keep collecting user speech into the current capture turn
+
+That one change alone will make interruptions feel much more natural.
+
+## My recommended interruption design
+
+This is the version I would build.
+
+### Client side
+
+Inside the AudioWorklet, compute onset confidence continuously on very small subframes, then keep batching PCM for upload separately. Since AudioWorklet currently runs in 128-frame blocks, you already have a very fast substrate for this. ([MDN Web Docs][1])
+
+On probable speech onset while JARVIS is thinking or speaking:
+
+* stop or sharply duck local playback immediately
+* send `interrupt_hint` on the control channel immediately
+* continue capturing mic audio without any reset
+
+This gives the user the “I heard you” feeling before the server even finishes reacting.
+
+### Server side
+
+On `interrupt_hint`:
+
+* increment `generation_epoch`
+* set `interrupt_event`
+* set `mind_interrupt`
+* cancel current LLM task
+* cancel pending TTS tasks
+* invalidate filler audio
+* mark current response outputs stale
+* keep capture active
+
+Every token stream, TTS result, filler clip, and mind pulse must carry the epoch that produced it. If the epoch is stale, discard it.
+
+Without this, late tokens and late WAV buffers will leak through after interruption.
+
+### Upstream model server
+
+This is the hard truth:
+
+**If the 35B server does not stop generation when the client disconnects or when it receives an explicit cancel, you do not yet have true interruption. You only have UI interruption.**
+
+For v3.1, the 35B server needs one of these:
+
+* disconnect-aware generation abort
+* explicit `request_id` + cancel endpoint
+* wrapper proxy that can cancel in-flight requests cleanly
+
+Otherwise the model may keep burning compute after the user has already started the next turn.
+
+## My recommended speech-end redesign
+
+Do not send to the LLM as soon as you hit first silence. Use a two-step commit.
+
+### Step 1: Candidate end
+
+After enough trailing silence, mark a **candidate end** but do not finalize yet.
+
+Recommended starting point:
+
+* candidate end after about **650–750 ms** of low speech probability
+* shorter only for obviously short commands
+* longer after barge-in, because interrupted speech often starts less cleanly
+
+### Step 2: Commit grace
+
+Once candidate end is reached:
+
+* snapshot the utterance
+* start **speculative ASR**
+* keep listening for a short extra grace window, around **250–350 ms**
+* if speech resumes, merge and cancel/discard the speculative result
+* if speech does not resume, commit and continue
+
+This gives you the best of both worlds:
+
+* you do **not** send to the LLM too early
+* you still hide ASR latency behind the grace window
+
+That is the best fix for “recordings are ending too quickly.”
+
+## Exact FSM I would use
+
+### Speech start
+
+Enter `pre_speech` when onset confidence is high for 2-of-3 short subframes.
+Promote to `in_speech` once:
+
+* minimum voiced duration is met, or
+* a stronger onset confidence threshold is crossed
+
+Use a 300–500 ms rolling prebuffer so first phonemes are preserved.
+
+### Speech end
+
+Move from `in_speech` to `maybe_end` only when:
+
+* speech probability drops below a lower exit threshold
+* and stays low long enough to avoid fricative/consonant dropouts
+
+Then:
+
+* enter `commit_grace`
+* run speculative ASR on the snapshot
+* finalize only when grace expires with no resumed speech
+
+This hysteresis is critical:
+
+* **high threshold to enter speech**
+* **lower threshold to exit speech**
+
+That is what stops natural pauses from splitting turns.
+
+## The best immediate fixes you can ship first
+
+These are the highest-value changes in order.
+
+### P0: fix the current architecture without big rewrites
+
+Make `JARVIS_MIND_REMOTE=1` the production default, and treat embedded mind mode as dev-only.
+
+Cut the voice-path lock timeout from seconds to tens of milliseconds. Better yet, on any onset or `interrupt_hint`, call `mind_interrupt.set()` immediately rather than waiting for lock acquisition to fail.
+
+Stop calling `vad._reset()` when the user barges in. Reset response state, not capture state.
+
+Unify the barge-in constants. Right now the spec still contains conflicting descriptions of two frames versus three frames and different latency language. That drift is making debugging harder.
+
+### P1: add a real fast interrupt path
+
+Add a client-side onset detector in the AudioWorklet.
+
+Send `interrupt_hint` from that fast path, not only after server-side chunk analysis.
+
+Stop playback locally before waiting for server confirmation.
+
+### P2: make speech-end robust
+
+Replace the single silence timer with:
+
+* candidate end
+* commit grace
+* pause bridging
+* dynamic hang
+
+Add speculative ASR at candidate end.
+
+### P3: make stale outputs impossible
+
+Add `generation_epoch` to:
+
+* token events
+* mind token events
+* filler audio
+* TTS outputs
+* pending initiative speech
+
+The browser should ignore stale generations automatically.
+
+## The best server/runtime changes
+
+I would make these architecture-level changes next.
+
+### 1) Separate control and media channels
+
+Right now JSON control and media are mixed on one WebSocket. It works, but it is not ideal for a system that lives or dies on interruption speed.
+
+Split into:
+
+* `/ws/control` for `interrupt_hint`, state, tokens, logs
+* `/ws/audio` for PCM up / WAV down
+
+That makes interruption messages first-class and easier to prioritize.
+
+### 2) Add a session epoch object
+
+Every session should have:
+
+* `capture_epoch`
+* `response_epoch`
+* `mind_epoch`
+
+On new speech start:
+
+* `response_epoch++`
+* `mind_epoch++`
+
+Any work produced under an older epoch is dropped.
+
+### 3) Use a priority queue, not a flat utterance queue
+
+User speech must outrank:
+
+* initiative speech
+* filler audio
+* background mind outputs
+* any lingering response work
+
+If user speech arrives, purge pending initiative/filler items immediately.
+
+### 4) Make remote mind mandatory in production
+
+The current docs admit the honest truth: background cognition can still run embedded and contend with the main model.
+
+That should end.
+
+Production should be:
+
+* remote mind sidecar only
+* separate model budget
+* separate cancellation path
+* no shared `llm_gate` with the user-facing 35B path
+
+MLX-LM’s prompt caching and rotating KV cache are a good fit for the sidecar’s repeated prefixes and long-lived identity / policy / prompt stacks. ([GitHub][4])
+
+## The best VAD/endpointer tuning plan
+
+I would tune the system around three goals:
+
+### Goal A: instant stop
+
+Use the client onset path for this.
+
+### Goal B: no clipped user onsets
+
+Use preroll and never reset capture on interrupt.
+
+### Goal C: no premature finalization
+
+Use candidate end + grace.
+
+A good starting configuration would be:
+
+* onset subframes: **20 ms**
+* onset vote: **2 of last 3**
+* preroll: **300–500 ms**
+* candidate end: **650–750 ms**
+* commit grace: **250–350 ms**
+* longer hang when the user is interrupting JARVIS
+* shorter hang for one-shot commands only if you have high confidence
+
+Then tune against real recordings.
+
+## One subtle but important debugging step
+
+Log the **actual** audio settings chosen by the browser on every session start.
+
+The browser can ignore unsupported constraints or choose the closest supported values, and `MediaStreamTrack.getSettings().sampleRate` tells you what was actually selected. MDN explicitly notes both that constraints may be ignored and that `getSettings()` exposes the actual chosen sample rate. ([MDN Web Docs][5])
+
+That matters because your thresholds and speech-band heuristics are only trustworthy if you know:
+
+* actual sample rate
+* actual channel count
+* whether echo cancellation is enabled
+* whether noise suppression / auto gain control are active
+
+I would put those values in the debug panel and in the session logs.
+
+## Prompt and agent changes that will improve robustness
+
+The main prompt issue is not personality. It is **cancellation cost**.
+
+Your mind prompts are still prose-heavy enough that interrupted thoughts can produce partial outputs that are annoying to parse and hard to store. For robustness, I would make these changes:
+
+Make `JARVIS_MIND_JSON=1` the production default.
+
+Have every mind pulse return structured output, even if you still keep a short private narrative string.
+
+Stop parsing `[INITIATIVE: ...]` out of freeform prose. Initiative should be a structured field, not a suffix convention.
+
+Shorten the hottest lanes:
+
+* observer
+* affect
+* validator
+
+Those should be compact enough that cancellation is cheap and persistence is reliable.
+
+## Postgres and spool feedback
+
+Your current Postgres use is fine. Keep LISTEN/NOTIFY as wake-up only. PostgreSQL’s own docs describe `NOTIFY` as a simple interprocess communication mechanism, recommend tables for additional structured data, and note that notifications are delivered only after commit. ([PostgreSQL][6])
+
+Your spool wording is now much more honest in v3, which is good. Keep that honesty:
+
+* crash-safe by default
+* reboot-safe only if the spool path is on durable storage
+
+That should stay explicit.
+
+## The best test plan
+
+Add a dedicated turn-taking regression suite with prerecorded fixtures and deterministic expected outcomes.
+
+The tests I would add first are:
+
+* user interrupts while JARVIS is speaking; playback stops locally immediately, server cancels, first user syllable preserved
+* user pauses for 250–350 ms mid-sentence; utterance does **not** finalize
+* user stops for 900 ms after a natural sentence; utterance **does** finalize
+* background mind pulse is active when user starts speaking; voice gets priority without waiting seconds
+* stale TTS bytes arrive after interrupt; browser discards them
+* initiative speech is queued when user begins speaking; initiative is dropped and user turn wins
+
+And track these metrics continuously:
+
+* client onset → local playback stop
+* client onset → server interrupt received
+* interrupt received → LLM stream cancelled
+* interrupt received → TTS queue flushed
+* candidate end → commit
+* false split rate
+* missed-first-syllable rate
+* stale-audio leak rate
+
+## The best rollout plan
+
+### Patch now
+
+Turn off embedded mind in production.
+Stop resetting VAD on barge-in.
+Lower `llm_gate` wait drastically.
+Unify the conflicting barge-in constants in code and docs.
+
+### Next
+
+Add client-side onset detection + local playback stop + `interrupt_hint`.
+
+### Then
+
+Implement candidate-end + grace + speculative ASR.
+
+### Then
+
+Add generation epochs and stale-output dropping everywhere.
+
+### Then
+
+Split control/media channels and require real upstream cancel support for the 35B server.
+
+## Bottom line
+
+The best next version is not a wholesale rewrite. It is a **turn-taking hardening pass**.
+
+The key principles are:
+
+* **fast start detection**
+* **slow end confirmation**
+* **response cancel is not capture reset**
+* **voice path never waits seconds on background thought**
+* **every output belongs to an epoch and stale work is dropped**
+* **user speech outranks everything**
+
+If you apply just those changes, JARVIS will feel dramatically more robust, more interruptible, and much less likely to cut users off early.
+
+[1]: https://developer.mozilla.org/en-US/docs/Web/API/AudioWorkletProcessor/process "AudioWorkletProcessor: process() method - Web APIs | MDN"
+[2]: https://github.com/wiseman/py-webrtcvad "GitHub - wiseman/py-webrtcvad: Python interface to the WebRTC Voice Activity Detector · GitHub"
+[3]: https://github.com/snakers4/silero-vad "GitHub - snakers4/silero-vad: Silero VAD: pre-trained enterprise-grade Voice Activity Detector · GitHub"
+[4]: https://github.com/ml-explore/mlx-lm "GitHub - ml-explore/mlx-lm: Run LLMs with MLX · GitHub"
+[5]: https://developer.mozilla.org/en-US/docs/Web/API/MediaTrackSettings/sampleRate "MediaTrackSettings: sampleRate property - Web APIs | MDN"
+[6]: https://www.postgresql.org/docs/current/sql-notify.html "PostgreSQL: Documentation: 18: NOTIFY"
+

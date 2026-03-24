@@ -1,0 +1,478 @@
+Yes — this latest v4 plan is stronger than my previous pooled plan. It is more executable, more specific, and much closer to the original brief.
+
+## Score
+
+Against the original ask — believable inner life, truthful self-knowledge, editable mission/settings, safe self-modification, git-based fork/test/revert, and warm A/B deployment — I’d score them like this:
+
+* **My previous pooled plan:** **96/100**
+* **Your latest JARVIS v4 plan:** **98/100** as an architecture
+* **Your latest JARVIS v4 plan as-written for safe implementation:** **90/100**
+
+Why the split: the architecture is excellent, but there are still a few trust-boundary and race-condition issues that could bite hard if you implement it exactly as written.
+
+## The short version
+
+Your new plan is very close.
+
+The biggest remaining weakness is **trust boundaries**.
+
+Right now the plan is excellent at describing how JARVIS should edit itself, but it still leaves open the possibility that the candidate build could influence the very rules, tests, manifests, or evaluators that are supposed to judge it. If that boundary is not made truly external and trusted, the whole Forge can be gamed by the candidate.
+
+The second biggest remaining weakness is **state-race risk**.
+
+The 9-state floor machine is correct in spirit, but the plan still reads like multiple parts of the system will directly assign `supervisor.floor = ...`. That is dangerous in an async voice system with barge-in, `tts_finished`, onset events, reconnects, and self-edit maintenance transitions.
+
+So: the plan is great. I would absolutely use it. But I would make these changes before calling it definitive.
+
+# What I would change directly
+
+## 1. Make the floor machine event-driven, not field-driven
+
+This is the single most important code-level change I would make.
+
+Do **not** let callers do this:
+
+```python
+supervisor.floor = FloorState.USER_SPEAKING
+supervisor.pending_user_turn_id = uuid4()
+```
+
+That will drift. It will race. It will create impossible states.
+
+Make `TurnSupervisor` own all transitions through methods only:
+
+```python
+supervisor.on_mic_onset()
+supervisor.on_vad_speech_start()
+supervisor.on_vad_speech_end()
+supervisor.on_transcript_final(turn_id)
+supervisor.on_generation_start(turn_id)
+supervisor.on_first_audio_sent(turn_id, epoch)
+supervisor.on_tts_finished(turn_id, epoch)
+supervisor.on_interrupt(reason)
+supervisor.on_maintenance_begin(job_id)
+supervisor.on_maintenance_end(job_id)
+```
+
+Each method should:
+
+* validate legal transition
+* update all coupled fields atomically
+* emit a structured transition log
+* increment a monotonic revision counter
+
+That prevents the classic async bug where one task changes `floor`, another changes `pending_user_turn_id`, and a third computes `background_eligible` from a half-updated state.
+
+## 2. Split “user debt” from “assistant occupancy”
+
+Right now the plan still conflates “I owe the user an answer” with “I am currently speaking.”
+
+Those are different.
+
+You want at least three separate concepts:
+
+* `pending_user_turn_id` — I owe a direct answer
+* `active_response_turn_id` — I have begun answering this turn
+* `audio_occupancy_turn_id` — my voice is currently occupying the floor
+
+I would clear **answer debt** on:
+
+* first meaningful user-visible response token/audio, or
+* explicit surfaced fallback/error
+
+I would clear **floor occupancy** only on:
+
+* `tts_finished`
+
+That distinction matters for watchdogs, metrics, and initiative suppression. Otherwise long healthy replies can look like orphaned turns, or vice versa.
+
+## 3. Add revocable leases for ambient mind and initiative
+
+Checking `background_eligible` once is not enough.
+
+Ambient work should acquire a short-lived **lease** from the supervisor:
+
+```python
+lease = supervisor.try_acquire_background_lease(kind="mind_pulse")
+```
+
+The lease becomes invalid immediately if:
+
+* mic onset fires
+* VAD goes hot
+* transcript lands
+* interrupt occurs
+* maintenance begins
+
+The same should apply to initiative playback:
+
+* initiative_worker acquires a speak lease
+* checks it again before `audio_start`
+* checks it again before each WAV enqueue
+* drops immediately on revoke
+
+Without leases, you can still get stale initiative speaking after the floor has changed.
+
+## 4. Move the trusted safety suite outside the candidate build
+
+This is my biggest architectural concern.
+
+The candidate **must not be able to weaken the rules that judge it**.
+
+So I would move these into a trusted, non-self-editable layer owned by `routerd/forged` or an external supervisor:
+
+* invariant suite
+* replay harness
+* golden fixtures
+* edit policies
+* module contracts
+* minimum required test list
+* deployment gating logic
+
+Right now you mark `spec/invariants.yaml` immutable, which is good, but that is not enough.
+
+I would also protect:
+
+* `spec/module_contracts.yaml`
+* `spec/edit_policies.yml`
+* golden replay fixtures
+* the trusted test runner
+* any code that decides pass/fail for candidate promotion
+
+Otherwise the candidate can “pass” by changing the map, not by fixing the system.
+
+## 5. Do not compile the self-model primarily from the Bibles
+
+This is the second big conceptual change I’d make.
+
+The Bibles are great human docs. But they should not be the primary source of runtime truth.
+
+I would make the self-model compile from:
+
+* machine-readable manifests
+* code ownership manifests
+* runtime introspection
+* current config / loaded services / git SHA / ports
+* explicit capability registry
+
+And then optionally attach Bible-derived narrative summaries for explanation.
+
+So I would change:
+
+> compiled from Bibles + runtime
+
+to:
+
+> compiled from manifests + runtime; Bibles are explanatory overlays
+
+Otherwise JARVIS can become confidently wrong about itself the moment docs drift from code.
+
+## 6. Add a real `quests` table
+
+Your plan uses `quest_id`, `recent_quests`, and `quest_threads`, but it doesn’t give them a first-class persistence model.
+
+I would add a dedicated table:
+
+```sql
+CREATE TABLE quests (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    domain TEXT NOT NULL,              -- science|system|user|self
+    objective TEXT NOT NULL,
+    status TEXT NOT NULL,              -- open|validating|shelved|resolved|abandoned
+    priority REAL DEFAULT 0.5,
+    novelty REAL DEFAULT 0.0,
+    evidence_refs JSONB DEFAULT '[]',
+    next_step TEXT,
+    source TEXT,                       -- user|mind|mechanic|researcher
+    created_at TIMESTAMPTZ DEFAULT now(),
+    last_touched_at TIMESTAMPTZ DEFAULT now(),
+    resolved_at TIMESTAMPTZ
+);
+```
+
+This is the missing backbone for the “interesting internal dialogue” requirement.
+
+Without a real quest system, `quest_id` risks becoming decorative.
+
+## 7. Add a Scientist/Validator lane back in
+
+This is a real gap in the current v4 plan.
+
+You have:
+
+* Observer
+* Researcher
+* Mechanic
+* Archivist
+* Dreamer
+* Initiator
+
+But you are missing a true **Scientist** or **Validator** lane that turns hypotheses into experiments and decides whether something graduates from idea to believed knowledge.
+
+I would add:
+
+* **Scientist** — proposes tests / measurements / counterexamples
+* **Validator** — epistemic gatekeeper for promotion to claims / quests / surfaced initiative
+
+Otherwise Dreamer and Researcher may create interesting content, but the system will still be weak at converting “interesting” into “validated.”
+
+And that matters a lot because your original brief is not just “think interesting thoughts.” It is “pursue interesting ideas worth pursuing, ideally new knowledge.”
+
+## 8. Treat prompt files in tiers, not as one editable class
+
+Right now `core/prompts/*` sits in mutable Tier 2.
+
+I would split prompts:
+
+* **Identity / safety / truth prompts** → critical or immutable
+* **Lane style prompts** → mutable
+* **mission overlays** → live or warm-reload
+* **UI disclosure phrasing** → mutable
+
+If the system can freely rewrite the wrong prompts, it can drift personality or weaken truthfulness while still “passing” surface tests.
+
+## 9. Make A/B switching session-aware and drain-aware
+
+The current blue-green design is good, but the switching rules need to be stricter.
+
+I would require `routerd` to:
+
+* pin an active session to A or B for the duration of a turn
+* only switch mid-session in explicit maintenance mode or when the session is drained
+* optionally checkpoint minimal session state if reconnect resumes on the new slot
+
+Otherwise the most likely ugly breakage is:
+
+* candidate passes
+* router flips
+* browser reconnects
+* the user loses the current turn, or audio/control messages cross slots awkwardly
+
+That is survivable, but it will feel bad in a voice-first system.
+
+## 10. Add Atlas freshness and coverage freshness gates
+
+The Code Atlas is only useful if it is fresh.
+
+I would block a deploy if:
+
+* touched files are newer than the atlas snapshot
+* test coverage provenance is stale for touched files
+* a changed module has no owning tests in `test_map`
+* a changed public interface no longer matches `module_contracts`
+
+This should be automatic.
+
+Otherwise the Forge can choose the wrong files or insufficient tests because its map is stale.
+
+## 11. Make maintenance audio browser-owned, but add a progress protocol
+
+Great idea overall. I’d keep it.
+
+But I would also add a tiny maintenance event protocol:
+
+```json
+{"type":"self_edit_begin","job_id":"...","phase":"planning"}
+{"type":"self_edit_progress","job_id":"...","phase":"testing","passed":12,"total":18}
+{"type":"self_edit_progress","job_id":"...","phase":"candidate_boot"}
+{"type":"self_edit_success","job_id":"..."}
+{"type":"self_edit_failure","job_id":"...","reason":"test_failure"}
+{"type":"rollback","job_id":"..."}
+```
+
+That makes the reboot feel intentional, not mysterious.
+
+## 12. Add a change ledger for non-code changes too
+
+Right now the plan is strong on code-change artifacts. Good.
+
+I would add the same provenance for:
+
+* live settings
+* mission changes
+* session overlays
+
+So JARVIS can later answer:
+
+* “What changed in you recently?”
+* “Why are you more science-focused today?”
+* “Can you undo the faster response setting?”
+
+That wants a persistent ledger:
+
+```sql
+CREATE TABLE self_changes (
+    id UUID PRIMARY KEY,
+    change_type TEXT,                 -- live_setting|mission|session_overlay|code_patch
+    key TEXT,
+    old_value JSONB,
+    new_value JSONB,
+    source TEXT,                      -- user|self|system
+    approved BOOLEAN,
+    reversible BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+```
+
+That helps introspection a lot.
+
+# The major concern
+
+The major concern is this:
+
+## The plan still needs a **hard trust boundary** between:
+
+* the system that proposes edits
+* the system that builds/tests the candidate
+* the system that decides whether the candidate is allowed to replace the live build
+
+If those are not truly separated, the self-edit system can become self-certifying.
+
+In plain English:
+
+If JARVIS can edit the thing that says “JARVIS passed,” then the Forge is not safe.
+
+That is the biggest thing I would tighten before implementation.
+
+# What might break first
+
+These are the first breakages I would expect in practice.
+
+## 1. Floor transition races
+
+Especially around:
+
+* `interrupt_hint`
+* `tts_finished`
+* reconnects
+* initiative queue
+* maintenance begin/end
+* simultaneous onset and stop_audio
+
+That’s why I’m pushing event-driven supervisor methods and leases so hard.
+
+## 2. Stale initiative speaking after the user resumes
+
+If initiative is queued and the user starts speaking just before `audio_start`, you can still get a ghost initiative unless the lease is rechecked at send time.
+
+## 3. Replay nondeterminism
+
+If candidate evaluation replays real sessions through stochastic models, you’ll get flaky promotion behavior.
+
+I would use:
+
+* deterministic fixtures where possible
+* invariant checks as primary gate
+* softer semantic-quality comparisons only as secondary signal
+
+## 4. Self-model drift
+
+If the self-model is compiled from docs and startup state only, it will become stale after live mission changes, self-edits, daemon restarts, or feature flags.
+
+It needs static + runtime composition, not one frozen JSON file.
+
+## 5. Test-gaming
+
+If the candidate can touch its own required tests, edit policies, or playbooks, the Forge can become a theater of compliance instead of real safety.
+
+## 6. TTS/ASR daemon semantics
+
+Once externalized, these services need:
+
+* per-request voice/config
+* cancellation
+* timeout handling
+* backpressure
+* versioned APIs
+
+Otherwise the blue-green swap solves one problem and introduces another.
+
+# New ideas I would add
+
+These are not necessary to make the plan good, but they would make it better.
+
+## A. Disclosure levels for “inner dialogue”
+
+The user wants internal dialogue, but raw private reasoning is still the wrong thing to expose.
+
+I’d add:
+
+* `off`
+* `quest_cards`
+* `inner_voice_excerpt`
+* `developer_debug`
+
+For normal use, show quest cards plus short rendered inner voice excerpts, not raw chain-of-thought blobs.
+
+## B. A dedicated emotional-probe route
+
+For:
+
+* “How does that make you feel?”
+* “Are you hurt?”
+* “What do you feel when I say that?”
+
+Route to:
+
+* `AffectVector`
+* `DriveVector`
+* Identity Kernel
+* outward-expression policy
+
+That avoids the generic “I have no emotions” answer while staying truthful.
+
+## C. A “manifest delta” response after self-edit
+
+After a successful self-edit, don’t just show the diff.
+
+Also show:
+
+* what changed in the self-model
+* what capability was added
+* what settings or routes were affected
+* whether rollback is still available
+
+That makes the system feel much more self-aware.
+
+## D. A “quest graduation” mechanism
+
+Let good mind threads graduate like this:
+
+```text
+pulse → quest → experiment → validated claim → initiative/tool/config/code change
+```
+
+That would make the internal life feel much more cumulative and much less like isolated bursts.
+
+# My final direct take
+
+Your updated plan is better than mine.
+
+It is more concrete, more complete, and more faithful to the original ask. It absolutely captures the spirit of:
+
+* real internal mission
+* truthful self-knowledge
+* editable self
+* git-based self-modification
+* rollback
+* warm A/B deployment
+
+But I would make these five edits before building:
+
+1. **Turn the floor machine into an event-driven kernel**
+2. **Separate answer debt from floor occupancy**
+3. **Move the trusted safety suite outside the candidate**
+4. **Compile self-model from manifests/runtime, not primarily from docs**
+5. **Add a first-class quests table plus Scientist/Validator lane**
+
+If you do those, the plan goes from “excellent design” to “something I would trust to implement.”
+
+## My final score after those changes
+
+* **Current updated v4 plan:** **98/100 architecture, 90/100 safe-as-written**
+* **With the five changes above:** **99/100**
+
+The last missing point is not intelligence.
+It is trust-boundary hardening.
+

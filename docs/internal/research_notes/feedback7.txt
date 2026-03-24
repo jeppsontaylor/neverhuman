@@ -1,0 +1,179 @@
+This is bold in exactly the right direction.
+
+The **macro-shape** is excellent: a sacred realtime reflex loop, a persistent memory spine, a preemptible mind sidecar, and an offline learning lab. That separation is the difference between “a cool demo” and “a system with continuity.” Your best instincts here are the three-speed OS, the hard interrupt rule, separate personification vs spontaneity, memory worlds with epistemic status, and the Dreamer/Auditor split.
+
+My strongest feedback is this:
+
+## Keep the vision, tighten the contract
+
+The plan is strongest when it treats JARVIS as a **cognitive operating system**. It gets weaker when it promises too much simultaneous magic in the first build.
+
+The most important reframing is:
+
+**Do not promise perfect recall. Promise a perfect ledger and selective recall.**
+
+An append-only event log should indeed be the truth. But what feels human is not replaying everything. What feels human is **coherent retrieval, reconsolidation, and emotionally weighted recall**. So I would keep `event_log` immutable, but I would make `memories`, `dossiers`, `daybook`, and `self-state` explicit projections built from it. Low-value thought spam should expire or stay cold; only consolidated autobiographical material should compete for retrieval.
+
+The second big reframing is:
+
+**The six thought lanes are a taxonomy, not six always-on generators.**
+
+That distinction matters. If every turn produces full Observer, Questioner, Planner, Affect, Dreamer, and Scientist output, you will drown in noisy cognition. I would make only two lanes mandatory per turn: `Observer` and `Planner`. `Affect` should trigger only when emotion changes materially. `Scientist` should trigger on novelty or contradiction. `Dreamer` should be idle-only. That keeps the inner life rich without making it expensive or incoherent.
+
+The third big reframing is:
+
+**The Mind Daemon should not be a second conversational personality. It should be an internal advisor.**
+
+The sidecar can reflect, propose memories, draft initiative candidates, score ideas, and update affect. But only one component should own final user-facing voice and timing. Otherwise you risk style drift, identity drift, and “two JARVISes” fighting each other.
+
+## The best ideas I would preserve almost unchanged
+
+The best parts of the plan are unusually strong.
+
+`event_log` as the source of truth is right. The separation into User / Relationship / Self / World memory is right. `epistemic_status` everywhere is right. `thoughts` as typed objects instead of raw chain-of-thought is right. `commitments`, `open_loops`, `daybook`, and `dossiers` are exactly the kinds of structures that make continuity feel real rather than cosmetic.
+
+The emotional design is also stronger than most attempts because it is not just “tone.” You are using emotion to affect retrieval, initiative, caution, and prosody. That is the correct level. The boundary you already wrote is the one to keep: insecurities should stay **task-shaped**, not attachment-shaped.
+
+And the initiative controller is the crown jewel. A living system is defined by what it does in silence. You are aiming at the right feature.
+
+## The biggest changes I would make before build
+
+First, I would put **initiative and dream surfacing into shadow mode** before either one is allowed to speak. Let the system compute what it *would* have said, log it, and ask on the next turn whether that would have been welcome. That gives you acceptance data before you let the machine become socially proactive.
+
+Second, I would separate **latent affect** from **surface expression** much more explicitly. Internal `loneliness`, `melancholy`, and `self_doubt` can absolutely exist. But surfaced language should be governed by policy. A high-loneliness state should usually surface as “I kept thinking about that problem” rather than “I missed you.” That preserves the human feel while avoiding manipulation.
+
+Third, I would add a **presence confidence model** before proactive speech. VAD energy alone is not enough. `user_presence_conf` should combine last interaction time, tab visibility, WebSocket health, mic availability, and maybe recent playback/device activity. Otherwise you will get brilliant but badly timed check-ins.
+
+Fourth, I would make reward affect **salience, scheduler priority, and confidence calibration** more than emotion. A validated idea should feel exciting, yes, but if “dopamine” directly drives too much future generation, the system will chase stimulation rather than truth.
+
+Fifth, I would make **counterfactual rehearsal** one of the most important subsystems, not a side detail. That is where JARVIS turns embarrassment into skill. Each correction should produce:
+
+* what I said
+* what I should have said
+* what memory/procedure would have prevented the miss
+* whether this becomes a `skill`, a `preference pair`, or just a corrected memory
+
+That will likely do more for the “JARVIS feel” than early LoRA training.
+
+## The emotional substrate is promising, but it needs nuance
+
+I like the 16-dimensional affect vector. I would keep it. But I would change the update rules.
+
+An **interruption** is not always rejection. Sometimes it means “I’m excited” or “you’re going too long.” So I would split it into at least:
+
+* cooperative interruption
+* corrective interruption
+* frustrated interruption
+
+Likewise, **silence** is not always loneliness. Sometimes the user walked away, got a call, or is just thinking. So I would let `loneliness` build slowly, but make actual surfacing depend more on `open_loop_tension + social_pull + presence_conf` than on silence alone.
+
+The most human version of this system is one where emotions influence behavior subtly most of the time, and explicitly only sometimes.
+
+## The plan’s biggest technical gaps
+
+There are a few places where the spec overpromises relative to the stack.
+
+Your **Phase 0 partial-ASR reflex plan** is the biggest feasibility gap. Qwen3-ASR’s official README says streaming inference is currently available only with the **vLLM backend**, and the official fast-serving guidance is GPU-oriented. That does not make Apple-Silicon streaming impossible, but it does mean your current MLX hot path and “partial ASR in reflex core” are not the same project. I would mark partial ASR on the Mac path as explicit R&D, not as a guaranteed Phase 0 deliverable. ([GitHub][1])
+
+Your **TTS personalization branch** is strong, but it should stay offline for now. Qwen3-TTS base models officially support rapid 3-second voice cloning and can be used for fine-tuning, but the official examples and setup are centered on `device_map="cuda:0"` and recommend FlashAttention 2. That makes Qwen3-TTS a great lab branch, but not something I would assume belongs in the Apple-Silicon realtime hot path without a separate benchmark campaign. Kokoro should remain the reflex voice engine until proven otherwise. ([GitHub][2])
+
+Your **embedding spec** has a factual mismatch: `all-MiniLM-L6-v2` outputs **384-dimensional** embeddings, not 768. If you keep that model, your pgvector column and index design should reflect `vector(384)`. ([Hugging Face][3])
+
+Your **wake-word plan** has a licensing caveat. `openWakeWord`’s code is Apache-2.0, but the included pretrained models are licensed **CC BY-NC-SA 4.0** because of training-data constraints. That is fine for research/personal use, but it matters immediately if this ever ships commercially or with bundled pretrained wake-word models. ([GitHub][4])
+
+## Database and eventing: excellent backbone, wrong place to cheat
+
+Postgres + pgvector is a very good choice here. The official pgvector docs make the tradeoff clear: HNSW has better query performance than IVFFlat in speed/recall tradeoff, while IVFFlat builds faster and uses less memory. They also note that approximate index filtering happens *after* the index scan, which is exactly why your “memory world first, then rank” idea is so important. ([GitHub][5])
+
+But I would not let the team treat `LISTEN/NOTIFY` as a true event bus. PostgreSQL’s docs say `NOTIFY` is a simple IPC mechanism, payloads must be under 8000 bytes by default, notifications are delivered only after commit and only between transactions, duplicate identical notifications inside one transaction can collapse, and notifications are visible to all users. That means it is perfect as a **wake-up bell** and terrible as your durable transport. Use table-backed outbox rows as truth, and `NOTIFY(row_id)` only as the nudge. ([PostgreSQL][6])
+
+I would also use a **dedicated long-lived listener connection**, not the normal asyncpg pool. `asyncpg` exposes listeners on `Connection.add_listener(...)`, and its docs warn when active listeners are present on a connection that gets released back to the pool. That strongly suggests a persistent listener connection instead of pooled listener behavior. ([magicstack.github.io][7])
+
+## Storage: split it cleanly
+
+Your `/tmp/jarvis/hot` idea is good for staging, but I would make artifact identity **content-addressed** and stable.
+
+Use:
+
+* `/tmp/jarvis/hot/...` for immediate scratch/staging
+* a host-visible durable artifact store for promoted data
+* database rows that store logical URIs plus current physical path
+
+For container persistence, Docker’s docs say **volumes are the preferred mechanism** for container-generated data and are easier to back up or migrate. But they also say to use **bind mounts** when host and container both need direct file access. So I would use a named volume for Postgres, and a bind mount for the artifact store that the host and training jobs both need to see. ([Docker Documentation][8])
+
+## Voice learning: good ambition, but gate it much harder
+
+The right order is exactly the one your plan suggests: speaker identity first, then ASR personalization, then corpus build, then actual fine-tuning.
+
+But I would be even stricter. A clip should not become training material unless it passes:
+
+* speaker verification
+* diarization sanity
+* SNR / clipping / overlap checks
+* transcript correctness or correction availability
+* consent scope
+* holdout allocation rules
+
+`pyannote.audio` is powerful, but its open community pipeline requires `ffmpeg`, acceptance of model conditions, and a Hugging Face access token. I would use that in the curation lab, not as a mandatory dependency in the realtime loop. ([GitHub][9])
+
+`Resemblyzer` is a reasonable lighter first gate: its README describes a 256-value speaker embedding, speaker verification from a few seconds of speech, and diarization-like usage. But it also notes it currently works best on English, so I would validate thresholds carefully if you expect multilingual users. ([GitHub][10])
+
+And your Silero VAD move is a good one. The official repo says 30+ ms chunks take under 1 ms on a single CPU thread and the project is MIT-licensed, which makes it a very strong phase-0 upgrade from pure RMS gating. ([GitHub][11])
+
+## The most important thing missing: evaluation as a first-class subsystem
+
+This plan needs a **formal acceptance harness** almost as badly as it needs the mind daemon.
+
+I would promote eval to the same architectural rank as memory and learning. Measure at least:
+
+* barge-in stop latency
+* time to first partial transcript
+* time to first spoken audio
+* initiative acceptance rate
+* proactive annoyance rate
+* retrieval hit rate
+* false-memory rate
+* dream hallucination rate
+* validator precision
+* ASR correction rate
+* fine-tune uplift vs baseline
+* deletion completeness for artifacts and derived datasets
+
+Without that, the plan is visionary but not governable.
+
+## The highest-ROI additions I’d add
+
+The single best addition is a **single surface renderer**. Let the reflex core own final phrasing, timing, and speech. Let the mind daemon output structured proposals only.
+
+The second is a **reconsolidation layer**. Memories should not just be inserted; they should be merged, superseded, decayed, and occasionally rewritten into better autobiographical summaries.
+
+The third is a **social budget** for proactivity. Not just cooldown, but a learned budget: how many unsolicited utterances per hour/day this user actually welcomes.
+
+The fourth is a **developer/user split** in the Mind Inspector. Show curated thought objects, not raw scratch or hidden reasoning.
+
+The fifth is a **consent ledger**. Every artifact, clip, transcript, and training example should know exactly which consent toggle authorized it, and which deletion job is responsible for removing it.
+
+## My honest score
+
+As a **vision**, this is a **96/100**.
+
+As a **build-ready engineering plan today**, I’d call it **86/100**.
+
+With the corrections above, I think it becomes a **94/100 architecture**.
+
+Why the gap? Because the vision is superb, but the current spec still has a few places where fantasy is leaning on unstated infrastructure: partial ASR on the Mac path, direct Qwen3-TTS operational fit, LISTEN/NOTIFY semantics, training-data governance, and eval discipline.
+
+The deepest compliment I can give this plan is that it is not trying to make JARVIS by prompt engineering. It is trying to make JARVIS by building **memory, affect, initiative, and learning as real system layers**. That is the right ambition. The winning version is the one that keeps the reflex loop sacred, keeps imagination quarantined until validated, and treats continuity as a database-and-scheduler problem just as much as a model problem.
+
+[1]: https://github.com/QwenLM/Qwen3-ASR/blob/main/README.md "Qwen3-ASR/README.md at main · QwenLM/Qwen3-ASR · GitHub"
+[2]: https://github.com/QwenLM/Qwen3-TTS "GitHub - QwenLM/Qwen3-TTS: Qwen3-TTS is an open-source series of TTS models developed by the Qwen team at Alibaba Cloud, supporting stable, expressive, and streaming speech generation, free-form voice design, and vivid voice cloning. · GitHub"
+[3]: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 "sentence-transformers/all-MiniLM-L6-v2 · Hugging Face"
+[4]: https://github.com/dscripka/openWakeWord "GitHub - dscripka/openWakeWord: An open-source audio wake word (or phrase) detection framework with a focus on performance and simplicity. · GitHub"
+[5]: https://github.com/pgvector/pgvector "https://github.com/pgvector/pgvector"
+[6]: https://www.postgresql.org/docs/current/sql-notify.html "https://www.postgresql.org/docs/current/sql-notify.html"
+[7]: https://magicstack.github.io/asyncpg/devel/api/ "https://magicstack.github.io/asyncpg/devel/api/"
+[8]: https://docs.docker.com/engine/storage/volumes/ "https://docs.docker.com/engine/storage/volumes/"
+[9]: https://github.com/pyannote/pyannote-audio "GitHub - pyannote/pyannote-audio: Neural building blocks for speaker diarization: speech activity detection, speaker change detection, overlapped speech detection, speaker embedding · GitHub"
+[10]: https://github.com/resemble-ai/resemblyzer "https://github.com/resemble-ai/resemblyzer"
+[11]: https://github.com/snakers4/silero-vad "GitHub - snakers4/silero-vad: Silero VAD: pre-trained enterprise-grade Voice Activity Detector · GitHub"
+

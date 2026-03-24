@@ -1,0 +1,44 @@
+[
+  {
+    "name": "VAD (spectral)",
+    "runs": 100,
+    "avg_ms": 0.12,
+    "min_ms": 0.02,
+    "max_ms": 10.48
+  },
+  {
+    "name": "VAD (Silero)",
+    "runs": 100,
+    "avg_ms": 0.41,
+    "min_ms": 0.38,
+    "max_ms": 0.6
+  },
+  {
+    "name": "Context hints build",
+    "runs": 1000,
+    "avg_ms": 0.01,
+    "min_ms": 0.01,
+    "max_ms": 0.07
+  },
+  {
+    "name": "Affect delta apply",
+    "runs": 10000,
+    "avg_ms": 0.0,
+    "min_ms": 0.0,
+    "max_ms": 0.08
+  },
+  {
+    "name": "Affect decay",
+    "runs": 10000,
+    "avg_ms": 0.0,
+    "min_ms": 0.0,
+    "max_ms": 0.08
+  },
+  {
+    "name": "Policy curves",
+    "runs": 10000,
+    "avg_ms": 0.0,
+    "min_ms": 0.0,
+    "max_ms": 0.11
+  }
+]

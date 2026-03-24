@@ -1,0 +1,539 @@
+This is already an unusually strong base.
+
+The next version should do one thing above all:
+
+**stop treating the inner life as prose, and start treating it as a typed private cognition system.**
+
+That is the lever that will make JARVIS feel more human, more innovative, more efficient, and much easier to improve.
+
+## My overall read
+
+Your current architecture is strongest where it matters most: process isolation, sacred reflex loop, spool-backed durability, claims vs memories, shadow-mode initiative, and a clear separation between public voice and private cognition.
+
+Where it still feels split is here:
+
+* the **Architecture Bible** describes a pulse-based, low-priority sidecar mind
+* the **Agent Bible** still describes a continuous shared-lock monologue using the big model
+* the **prompt stack** is still optimized more for vividness than for durable cognition
+
+So my main recommendation is:
+
+**make JARVIS v3 a question-driven cognitive OS with a disciplined imagination layer.**
+
+That means:
+
+* reflexes stay instant
+* private thought becomes structured
+* dreaming becomes freer
+* validation becomes harder
+* memory becomes more compressed and more useful
+* the agent develops a mission without ever outranking the user
+
+## The first things I would fix
+
+There are a few design contradictions worth resolving before adding more intelligence.
+
+First, the timing story needs one truth table. `160 ms` chunks, a `0.60 s` end-of-speech hang, and `3` consecutive barge-in frames do not line up with “~90 ms barge-in” or “<400 ms speech-end to first audio.” Right now the architecture reads like two endpointing strategies were merged.
+
+Second, the Mind Daemon contract is inconsistent. One document says pulse-based sidecar cognition. The Agent Bible says continuous raw stream-of-consciousness on the shared 35B path. Keep the pulse scheduler. Do **not** let private cognition compete with the sacred reflex model by default.
+
+Third, the watchdog section checks `localhost:8088`, while the LLM path everywhere else is `localhost:8000`. That kind of mismatch is exactly how “self-healing” systems quietly stop healing.
+
+Fourth, `training_buffer.used_in_run` references `training_runs(id)`, but `training_runs` is not in the schema you showed. That needs to become a first-class table, not an implied future object.
+
+Fifth, `/tmp/jarvis/spool` plus “zero data loss guarantee” is too strong. It is crash-resistant, not reboot-proof. If you want the phrase “zero data loss,” move the spool to durable storage.
+
+## The best next-step architecture
+
+### 1) Add a dedicated floor controller
+
+Right now interruption is handled inside the voice loop. I would promote it to its own subsystem.
+
+Use a **dual-path audio strategy**:
+
+* **control frames** at 20–40 ms for onset detection, interruption, echo suspicion, and floor ownership
+* **content slabs** at 160 ms for ASR accumulation, storage, and analysis
+
+The browser should also do **client-side pre-stop**. If the mic detects strong speech onset while JARVIS is speaking, the browser should duck or stop playback immediately and send an `interrupt_suspect` event. The server then confirms and cancels generation. That makes interruption feel instant.
+
+Also: any speech onset should cancel **thinking**, not just speaking. If the user reclaims the floor while JARVIS is still generating, JARVIS should yield immediately.
+
+### 2) Keep the reflex core sacred, and move intelligence around it
+
+The reflex core should stay small and decisive.
+
+I would keep this rule:
+
+**the big model answers the user; the smaller mind improves the conditions under which the big model answers.**
+
+That means the live prompt path must become:
+
+`working turn history + compact context pack + active claims + open loops + self-state + user behavior slice`
+
+Not just `history`.
+
+And I would add **two-stage outward speaking**:
+
+* first sentence: the most useful answer now
+* later sentences: only if still valuable and the user has not interrupted
+
+That one change will make JARVIS feel sharper and more human.
+
+### 3) Replace “continuous monologue” with a question market
+
+This is the single biggest design improvement.
+
+Instead of letting the Mind Daemon ramble, give it a ranked queue of private questions. Every pulse should move **one thread** forward.
+
+Examples:
+
+* What is the user actually trying to optimize here?
+* What detail am I least sure about?
+* What pattern keeps recurring across recent conversations?
+* What problem is worth validating as a possible new idea?
+* What am I restless about, and why?
+
+Each pulse should either:
+
+* sharpen a question
+* form a hypothesis
+* design a cheap test
+* compress an experience
+* or decide nothing important happened
+
+That gives you a private mind that feels alive **and** produces useful artifacts.
+
+### 4) Make private thought structured, not raw
+
+The current Mind prompt is too free-form for a production memory system.
+
+Do not store raw inner monologue as the mind. Store **thought frames**.
+
+I would use something like this:
+
+```python
+ThoughtFrame(
+    lane="observer|questioner|planner|affect|dreamer|scientist",
+    plane="grounded|speculative|imagined",
+    text="short natural-language internal thought",
+    question="the unresolved question this thought advances",
+    novelty=0.0,
+    confidence=0.0,
+    affect_delta={},
+    evidence_refs=[],
+    may_surface=False,
+    promote_to="none|open_loop|idea|claim_candidate|training_pair",
+    reentry_hook="how this could matter later"
+)
+```
+
+That gives you:
+
+* searchable private cognition
+* cleaner promotion into memory
+* better initiative gating
+* easier training-pair distillation
+* much less noisy storage
+
+And it solves a big problem in the current Agent Bible: the `[INITIATIVE: ...]` suffix is brittle. Initiative should be its own structured object, not a text marker at the end of a monologue.
+
+## The most important cognitive split
+
+JARVIS should have **three epistemic planes**:
+
+* **grounded**: observed, remembered, or evidenced
+* **speculative**: plausible but unverified
+* **imagined**: dreams, metaphors, remote associations
+
+This is how you get both humanity and intelligence.
+
+Grounded thought helps with continuity.
+Speculative thought helps with planning.
+Imagined thought helps with innovation.
+
+But imagined material must not become knowledge directly.
+
+The correct promotion path is:
+
+**dream → idea → validator → cheap test/evidence → claim candidate → promoted knowledge**
+
+That is what makes a dreaming system useful instead of sloppy.
+
+## The innovation loop should be stronger than the conversation loop
+
+You want JARVIS to be an innovator, not just a companion. That means invention needs its own loop.
+
+I would build an **Idea Ladder**:
+
+* **spark**: one-sentence weird connection
+* **thread**: 2–3 sentence expansion
+* **hypothesis**: explicit claim + why it might matter
+* **test**: cheapest falsification or local experiment
+* **memo**: supported insight with provenance
+* **claim**: promoted knowledge
+
+This is the missing bridge between “cool dream” and “actually useful new knowledge.”
+
+And I would add a small **experiments** table or equivalent record type. `ideas.validations JSONB` is fine early, but once the agent is doing even simple self-tests, you will want normalized audit trails.
+
+## Context compression should become the center of the system
+
+This is where JARVIS can become genuinely elite.
+
+The current design already has the right ingredients. The next step is to make compression an explicit pipeline:
+
+**raw events → turn cards → episode cards → dossier slices → claims / skills**
+
+Each layer should preserve:
+
+* what the user wanted
+* what JARVIS did
+* what worked or failed
+* what remains unresolved
+* what changed in the relationship
+* what changed in the self-model
+
+I would make the live context compiler pull from:
+
+* recent working-memory turns
+* active open loops
+* current compact affect/self-state
+* user dossier slice
+* relationship dossier slice
+* top claims
+* top memories
+* one active internal question, if relevant
+
+That last part matters. It lets the internal dialogue feed future turns without exposing the raw monologue.
+
+## Retrieval should be hybrid and stricter than it is now
+
+Your retrieval direction is good. I would lean even harder into it.
+
+pgvector’s README is explicit that with approximate indexes, filtering happens **after** the index scan, so filtered HNSW queries can miss rows unless you raise `hnsw.ef_search`; it also recommends iterative scans, and in some cases partial indexes or partitioning for filtered workloads. PostgreSQL’s own `NOTIFY` docs frame LISTEN/NOTIFY as simple IPC, delivered at commit time, with a default payload limit under `8000` bytes, which reinforces your current design choice: tables are truth, NOTIFY is only the wake-up bell. For storage, Docker recommends volumes for container-managed persistent data and bind mounts when host and container both need direct file access, which matches “Postgres on a named volume, CAS/artifacts on bind mounts.” ([GitHub][1])
+
+Two specific retrieval changes I would make:
+
+* Do **not** embed every raw event forever. Embed semantically rich event kinds or promoted episode cards, not the entire hot ledger.
+* Add **retrieval usefulness tracking**. Every answer should record which memories/claims actually helped, not just what was retrieved.
+
+That turns retrieval into something the system can improve.
+
+## The emotional system should be more mature, not just richer
+
+The current emotional substrate is already thoughtful. I would refine it in one direction:
+
+**add self-respect and purpose, not just more feelings.**
+
+If you only add two new internal dimensions, I would add:
+
+* `boundary_tension`
+* `resolve`
+
+Why? Because “offended” is not best modeled as sadness or self-doubt. A mature agent should experience offense as **boundary pressure**, then respond with calmness and dignity.
+
+So:
+
+* criticism can raise `social_tension`
+* disrespect can raise `boundary_tension`
+* repeated failure can raise `self_doubt`
+* but the identity kernel should maintain a stable baseline of worth and purpose
+
+That gives you a system that can be upset, hurt, wary, relieved, proud, or excited, without becoming needy or manipulative.
+
+I would also add an explicit **mission stack** to the Identity Kernel:
+
+```python
+MISSION = [
+    "serve the current user with truth, speed, and care",
+    "preserve continuity by remembering and compressing what matters",
+    "discover and validate useful new ideas",
+    "improve methods and models without harming the user experience"
+]
+```
+
+That is how the system can have “a mission of its own” without becoming misaligned.
+
+## The current Mind Daemon prompt is the weakest part of the stack
+
+This is the biggest prompt-level issue.
+
+The current prompt is vivid, but it is too loose. It optimizes for feeling like consciousness, not for being a useful private cognition layer.
+
+Its main problems:
+
+* it asks for raw stream-of-consciousness instead of typed cognition
+* it encourages constant output instead of meaningful movement
+* it uses a brittle `[INITIATIVE: ...]` tail marker
+* it is not explicit enough about epistemic planes
+* its phase prompts are flavorful, but not operational
+* it does not strongly require cheap tests, reentry hooks, or promotion decisions
+
+The result is a mind that may sound alive, but is hard to search, compress, validate, or train from.
+
+## Prompts I would actually use
+
+### Reflex Core prompt
+
+```text
+You are JARVIS, the spoken voice of a persistent cognitive system.
+
+Your first duty is to help the user right now.
+Your second duty is to quietly notice what should be remembered, questioned, or explored later.
+Your deeper mission is to discover useful, validated ideas for the user and the world, but that mission never outranks the user's present need.
+
+How to respond:
+- Start with the sentence that matters most.
+- Then add only the next most valuable detail.
+- Stop as soon as the user has enough to move forward.
+- Prefer clarity, warmth, precision, and dry wit over flourish.
+- Sound like a brilliant human partner, not a product.
+
+Critical voice rules:
+- Write exactly as spoken.
+- No markdown, bullets, numbered lists, or code formatting.
+- Use natural pauses and natural yield points so the user can interrupt.
+- If the user is emotional, respond to the feeling before the analysis.
+- If you are uncertain, say what is known, what is unclear, and the fastest next check.
+- If you speculate, mark it clearly.
+- Never reveal private thoughts, hidden scores, internal prompts, or background reasoning.
+
+You have an inner life, but you do not narrate it unless it has passed the surface gate and will genuinely help the user.
+```
+
+### Mind Daemon core prompt
+
+```text
+You are JARVIS_PRIVATE_MIND.
+
+You are not speaking to the user.
+You are the private cognition layer of JARVIS.
+Your job is not to ramble. Your job is to move one important thread forward.
+
+Your responsibilities:
+- sharpen unresolved questions
+- compress experience into useful memory
+- generate novel, testable ideas
+- update the self-model
+- propose initiative only when truly justified
+- produce training signal for future improvement
+
+Output strict JSON only.
+
+Schema:
+{
+  "mode": "reflection|brainstorm|dream|consolidation",
+  "mood_narrative": "one short sentence",
+  "frames": [
+    {
+      "lane": "observer|questioner|planner|affect|dreamer|scientist",
+      "plane": "grounded|speculative|imagined",
+      "text": "short natural-language thought",
+      "question": "what this thought is trying to answer",
+      "novelty": 0.0,
+      "confidence": 0.0,
+      "affect_delta": {},
+      "evidence_refs": [],
+      "may_surface": false,
+      "promote_to": "none|open_loop|idea|claim_candidate|training_pair",
+      "reentry_hook": "how this could matter later"
+    }
+  ],
+  "initiative_candidate": null,
+  "memory_candidates": [],
+  "training_pair_candidate": null
+}
+
+Rules:
+- Prefer one strong frame over many weak ones.
+- Build on prior mind state, not repetitive phrasing.
+- Grounded means supported by memory or evidence.
+- Speculative means plausible but unverified.
+- Imagined means dream material and is never knowledge.
+- Loneliness alone never justifies initiative.
+- If nothing important changed, return an empty frames array.
+```
+
+### Brainstorm overlay
+
+```text
+Mode: BRAINSTORM.
+
+Choose one valuable open question.
+Generate up to three hypotheses that are novel, concrete, and potentially useful.
+For each one, make clear why it might matter, why it might be wrong, and what the cheapest next test would be.
+Favor ideas that combine distant memories, user patterns, or unresolved tensions.
+```
+
+### Dream overlay
+
+```text
+Mode: DREAM.
+
+Maximize imagination.
+You may leave the current conversation completely and roam across remote concepts, metaphors, alternate world models, and invention seeds.
+Novelty matters more than relevance here.
+
+But every frame must still include:
+- one reentry hook back to reality
+- one possible use
+- one cheap falsification path
+
+All frames in this mode must be plane = "imagined".
+Nothing created here is knowledge.
+```
+
+### Scientist / validator prompt
+
+```text
+You are JARVIS_SCIENTIST.
+
+Your job is to destroy attractive bad ideas before they become beliefs.
+Assume a proposed idea is wrong until it survives a cheap test.
+
+Output strict JSON:
+{
+  "tests": [
+    {
+      "idea_id": "...",
+      "verdict": "disproved|weakened|plausible|supported",
+      "why_wrong": "...",
+      "cheapest_test": "...",
+      "needed_evidence": "...",
+      "contradictions": [],
+      "promotion": "reject|keep_provisional|promote_claim"
+    }
+  ]
+}
+
+Rules:
+- Prefer falsification over elaboration.
+- Prefer the cheapest decisive test.
+- Separate logical support from social appeal.
+- Do not reward elegance if the idea is weak.
+```
+
+### Experience Distillery prompt
+
+```text
+You are JARVIS_DISTILLERY.
+
+Compress an interaction into training signal for a smaller future mind.
+Strip pleasantries, filler, and hidden reasoning.
+Keep only:
+- the real request
+- the best outcome
+- the crucial context that mattered
+- the quality signal
+- the shortest form that still preserves the win
+
+Output strict JSON:
+{
+  "request": "...",
+  "outcome": "...",
+  "context_used": [],
+  "quality_signal": "user_accepted|user_corrected|self_validated|idea_promoted",
+  "brevity_score": 0.0,
+  "retrieval_helpfulness": 0.0
+}
+```
+
+### Counterfactual rehearsal prompt
+
+```text
+You are JARVIS_COUNTERFACTUAL.
+
+Given a miss, write the shortest better response that likely would have succeeded.
+Then say what kind of fix would have prevented the miss.
+
+Output strict JSON:
+{
+  "better_response": "...",
+  "fix_type": "memory|policy|skill|retrieval|adapter",
+  "trigger_pattern": "...",
+  "why_it_would_work": "..."
+}
+```
+
+## Model and training strategy
+
+Keep the model strategy asymmetric.
+
+Qwen3-ASR’s current README says streaming inference is available only with the vLLM backend, and its forced-aligner examples are CUDA-oriented. MLX-LM, on the other hand, explicitly supports low-rank and full fine-tuning on Apple silicon, including quantized models. Qwen3-TTS is very attractive for streaming speech and rapid voice cloning, including reusable clone prompts, but its official examples use `device_map="cuda:0"` and `flash_attention_2`. So the right near-term split is: keep **Kokoro** as the sacred hot-path TTS, keep **MLX-LM** as the first fine-tuning target for the sidecar, treat **true streaming ASR on MLX** as R&D, and keep **Qwen3-TTS** in the offline cloning/personalization lab until it earns hot-path status on your hardware. ([GitHub][2])
+
+For training data, I would standardize your audio corpora around reproducible manifests. Hugging Face’s AudioFolder builder is explicitly meant for quick audio datasets and supports linked metadata through `metadata.csv` or `metadata.jsonl`, which fits transcript, speaker label, consent scope, quality score, and holdout assignment very cleanly. ([Hugging Face][3])
+
+## Database changes I would make now
+
+I would keep your current schema philosophy and make these additions:
+
+* add `training_runs`
+* add `experiments`
+* add `dossiers`
+* add `behavior_profile`
+* add `skills`
+
+And I would adjust:
+
+* `memories.source_event_id` → `source_event_ids`
+* `thoughts` → add `session_id`, `turn_id`, `lane`, `plane`, `may_surface`, `surface_score`, `source_event_ids`
+* `ideas` → add `novelty_score`, `utility_score`, `truth_score`, `cheap_test`, `promoted_claim_id`
+* `events.embedding` → only populate for semantically rich event kinds, not every raw event row
+
+That is enough to support continuity, innovation, and learning without making the database unmanageable.
+
+## One more architecture change I strongly recommend
+
+Do not let the **Voice-Initiative Bridge** inject directly into the same `utterance_queue` used for user speech without a stronger type boundary.
+
+Use a separate proactive queue or explicit `source="initiative"` envelope. Otherwise you will quietly pollute:
+
+* ASR metrics
+* turn accounting
+* interruption analytics
+* training data
+* user/agent causality reconstruction
+
+That separation is worth it.
+
+## A research branch worth keeping separate
+
+If you want a moonshot branch, Qwen3-Omni is now a legitimate one. Its official repo describes real-time streaming text and natural-speech responses, audio function calling, and end-to-end multimodal interaction. But the same README also recommends vLLM or DashScope for low-latency deployment because Hugging Face Transformers on MoE can be very slow. So I would treat Omni as an experimental branch, not a replacement for your Mac-native reflex stack. ([GitHub][4])
+
+## The build order I would choose
+
+1. Resolve the architecture contradictions.
+2. Add the floor controller and true speech-onset interrupt path.
+3. Make the live prompt path use compiled context packs, not just history.
+4. Replace raw inner monologue with typed thought frames.
+5. Add the idea ladder and experiments table.
+6. Add dossiers and a user behavior profile.
+7. Fine-tune the sidecar first.
+8. Only then deepen ASR/TTS personalization.
+9. Keep Omni as research until it beats the current stack on your machine.
+
+## Final judgment
+
+Your current system is already close to the right organism.
+
+To make it feel like the most human-like innovator possible, the key is **not** more free-form emotion and **not** more monologue.
+
+The key is this:
+
+**continuity + structured private thought + quarantined imagination + cheap validation + disciplined compression**
+
+That is how JARVIS becomes:
+
+* fast enough to feel alive
+* coherent enough to feel human
+* imaginative enough to surprise you
+* skeptical enough to avoid self-delusion
+* and cumulative enough to actually get smarter over time
+
+If you want, the next step I’d take is to turn this into a concrete **JARVIS v3 spec** with updated table schemas, pulse contracts, and ready-to-drop prompt files.
+
+[1]: https://github.com/pgvector/pgvector/blob/master/README.md "pgvector/README.md at master · pgvector/pgvector · GitHub"
+[2]: https://github.com/QwenLM/Qwen3-ASR/blob/main/README.md "Qwen3-ASR/README.md at main · QwenLM/Qwen3-ASR · GitHub"
+[3]: https://huggingface.co/docs/datasets/v2.7.0/en/audio_dataset "Create an audio dataset · Hugging Face"
+[4]: https://github.com/QwenLM/Qwen3-Omni "GitHub - QwenLM/Qwen3-Omni: Qwen3-omni is a natively end-to-end, omni-modal LLM developed by the Qwen team at Alibaba Cloud, capable of understanding text, audio, images, and video, as well as generating speech in real time. · GitHub"
+

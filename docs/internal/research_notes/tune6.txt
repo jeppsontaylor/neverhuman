@@ -1,0 +1,321 @@
+After reading both bibles closely, my strongest recommendation is this:
+
+**Make JARVIS answer in layers, and think in packets.**
+
+That is the big shift.
+
+Right now the architecture is already unusually strong. The sacred reflex loop, memory spine, idle cognition, claims layer, retrieval audit, and learning flywheel are all the right bones. The place I would change most is the *shape* of generation. At the moment, both outward speech and inward cognition still behave too much like full generative utterances. That is why the reflex can still feel slower than it should, and the mind can still feel richer than you want but not fluid enough.
+
+The system you want is asymmetric:
+
+* **Outwardly**: short, decisive, first-answer-first, easy to interrupt, rarely overlong.
+* **Inwardly**: many short thoughts, clearly typed, chained to prior ideas, constantly branching and recombining.
+
+A human-like agent is not a verbose agent. It is an agent that knows when to be fast, when to deepen, and how to carry an inner current without making the user wait for it.
+
+## The single biggest architectural change
+
+Add a **Cognitive Tempo Controller** that sits *before* context compilation and model routing.
+
+Do **not** let the humanity slider carry this job. Humanity and tempo are different. A warmer agent is not automatically a slower one, and a more imaginative agent is not automatically a more rambling one.
+
+Keep `humanity`, but internally add two hidden controls:
+
+* **tempo**: how fast and short the outer reply should be
+* **imagination flux**: how dense and creative the inner thought stream should be
+
+Then let the controller choose a route for each turn.
+
+| Route           | When                                               | Model path                                 | Context pack     | Spoken shape                                                   |
+| --------------- | -------------------------------------------------- | ------------------------------------------ | ---------------- | -------------------------------------------------------------- |
+| **Snap**        | simple, low-stakes, high-confidence                | fast responder only                        | minimal          | one sentence, then stop                                        |
+| **Snap+**       | medium complexity                                  | fast responder first                       | minimal/standard | answer sentence, brief pause, maybe one more                   |
+| **Deep**        | multi-part, ambiguous, high-stakes, low-confidence | fast responder first sentence + deep model | full             | answer direction immediately, deepen only if user stays silent |
+| **Verify/Tool** | external fact, tool use, action needed             | fast responder + tool/search               | standard/full    | provisional direction, then verified result                    |
+
+The default should be **Snap**, not “let the big model speak unless proven otherwise.”
+
+That one change will do more for felt intelligence than almost anything else.
+
+## Route simple turns away from the big model
+
+Your current architecture still over-trusts the 35B reflex model as the universal first speaker. Even with Flash-MoE, that is the wrong shape for the experience you want.
+
+The best version is a **three-tier inference design**:
+
+1. **Router**: tiny heuristic or tiny model
+2. **Fast responder**: small model for immediate answer or first sentence
+3. **Deep reasoner**: the 35B only when needed
+
+That means:
+
+* easy questions never touch the big model
+* medium questions get a fast first sentence immediately
+* hard questions still feel instant because the user hears something useful while deeper work happens
+
+For example:
+
+* easy: “Yes, the core fix is a response controller.”
+* medium: “The main issue is that speed and depth aren’t being routed separately.”
+* hard: “My first take is that you need a dedicated tempo controller — I’m checking how I’d wire it into the rest of the stack.”
+
+That is much better than a generic filler clip plus a delayed rich answer.
+
+## Finish the process split completely
+
+This is important.
+
+Your philosophy says the voice loop is sacred, but the implementation still admits contention from embedded mind work. The timeout logic is a good patch, not the final shape.
+
+If fluidity is the goal, then:
+
+* the mind must never hold a lock that voice can wait on
+* the fast responder must have priority over background cognition
+* all background pulses must be fully preemptible
+
+So my recommendation is:
+
+* fully finish the remote `mindd` split
+* give the fast responder its own high-priority lane
+* treat any shared lock between user speech and inner thought as temporary debt to eliminate
+
+A voice-first system should not *ever* feel like it is waiting for its own daydream.
+
+## Change outward response behavior
+
+The outer agent should follow one hard rule:
+
+**Lead with the answer, not with the process.**
+
+I would change the reflex behavior in five specific ways.
+
+First, make the first sentence tiny by default. Most turns should start with a sentence that is under roughly one breath.
+
+Second, make `MAX_TOKENS` dynamic instead of fixed at `800`. Something more like:
+
+* Snap: very low
+* Snap+: low
+* Deep: moderate
+* only explicit deep dives get large budgets
+
+Third, lower temperature for fast user-direct modes, and raise it only for brainstorm and dream. Right now the same general creativity setting across modes works against you.
+
+Fourth, add a **yield window** after the first sentence. This is a very human change. After the first useful sentence is spoken, wait a few hundred milliseconds with very sensitive barge-in. If the user jumps in, stop. If they stay silent, continue. Humans do this constantly. It will make JARVIS feel dramatically less monologic.
+
+Fifth, make filler audio **adaptive**, not default. Filler should be a fallback only when the first useful sentence misses a deadline. Otherwise it masks latency instead of solving it. The metric that matters is not “first audio.” It is **first useful audio**.
+
+## Add route-aware context packs
+
+This is one of the highest-leverage speed wins in the whole system.
+
+Right now the context pack is strong, but it still feels too uniform. You do not need the same pack for a yes/no question, a code rewrite, an emotional check-in, and a long reasoning task.
+
+So I would make **Context Pack v3** route-aware:
+
+* **Fast pack**: last user turn, last assistant turn, pacing profile, maybe one active thread
+* **Standard pack**: current v2 behavior
+* **Deep pack**: current v2 plus richer retrieval
+* **Creative pack**: question-ledger plus adjacent idea arcs, but still bounded
+
+This matters because prompt size is latency, especially on local models.
+
+Fast turns should not pay for full retrieval they do not need.
+
+## Redesign the inner dialogue completely
+
+This is the other major change.
+
+Your current mind design still has a mismatch:
+
+* the core mind prompt wants short raw stream-of-consciousness
+* the lane prompts allow much longer structured outputs
+* the result risks prose-shaped thinking instead of high-flow idea movement
+
+For the system you want, I would stop treating inner thought as paragraphs and start treating it as **typed thought atoms**.
+
+Not long reflections. Not mini essays. Not literary monologue.
+
+Short packets.
+
+Each pulse should emit a set of tiny structured atoms like:
+
+* observe
+* question
+* hypothesis
+* link
+* plan
+* affect
+* imagination
+* experiment
+* verdict
+* initiative
+
+Make JSON the source of truth, and render colors from type in the UI.
+
+A sample shape:
+
+```json
+{
+  "mode": "brainstorm",
+  "thread_id": "latency_reflex",
+  "atoms": [
+    {"kind": "observe", "text": "Filler hides real responsiveness."},
+    {"kind": "question", "text": "Can fast turns skip the big model?"},
+    {"kind": "hypothesis", "text": "Use a small responder for the first sentence."},
+    {"kind": "link", "text": "Route-aware context pack cuts prefill too."},
+    {"kind": "experiment", "text": "Measure first useful audio, not first audio."}
+  ]
+}
+```
+
+This solves three problems at once:
+
+* much shorter outputs
+* much more idea volume
+* clean color-coded visualization
+
+## Simplify the top-level modes
+
+You already named the right top-level modes:
+
+* **user-direct**
+* **reflection**
+* **brainstorm**
+* **dream**
+
+I would keep those four as the primary scheduler states.
+
+Then I would demote the current extra lanes — validator, observer, planner, affect, questioner, scientist — into **packet types or micro-passes**, not full separate personalities.
+
+That will make the whole mind feel more continuous.
+
+Right now the nine-lane design is smart, but it risks fragmentation. What you want is one mind moving through four depths, not nine little minds taking turns.
+
+## Make the mind a sea of short bursts, not a few long swells
+
+This is where the “more ideas flowing” goal gets real.
+
+Do not ask the model for one long brainstorm or one long dream. Ask for **two or three short bursts**, then dedupe, link, and promote.
+
+A good pattern is:
+
+1. **Burst**: generate several short atoms
+2. **Link**: connect them to existing threads or questions
+3. **Prune**: discard repeats, score novelty and usefulness
+4. **Promote**: keep only the strongest atoms active
+5. **Validate**: let imagination become knowledge only through evidence
+
+That creates idea motion.
+
+Long prose drifts. Short bursts branch.
+
+I would budget the modes roughly like this:
+
+| Mode           | Shape                                                            |
+| -------------- | ---------------------------------------------------------------- |
+| **Reflection** | 3–5 atoms, tightly tied to last user turn                        |
+| **Brainstorm** | 6–10 atoms, mostly hypotheses and links                          |
+| **Dream**      | 8–14 atoms, explicitly imagined, cross-thread bridges encouraged |
+| **Validator**  | 2–4 atoms, always short, post-pass only                          |
+
+And I would add one continuity rule:
+
+**Most new atoms must attach to an existing thread, question, or memory.**
+
+That is what will make the flow feel like a real mind with continuity instead of random sparkle.
+
+## Make questions the spine of the inner life
+
+This is important for independence.
+
+The inner world should not primarily orbit “thoughts.” It should orbit **questions**.
+
+Questions persist. Ideas branch off them. Experiments test them. Claims close them.
+
+So I would make the scheduler question-led:
+
+* reflection sharpens or creates questions
+* brainstorm proposes answers or experiments for a chosen question
+* dream cross-pollinates two distant questions
+* validator decides whether anything can move toward claim status
+
+This makes the mind feel like it has fascinations, not just noise.
+
+It also gives you a clean path for self-directed knowledge seeking: when a question stays salient long enough, the agent can trigger a low-priority retrieval or research task, then route the result through validation.
+
+That is how imagination turns into learning.
+
+## Preserve continuity without bloating prompts
+
+Do not feed raw thought flood back into the reflex model.
+
+Instead, maintain two layers:
+
+* **atom layer**: the short packet stream
+* **arc layer**: compact summaries of active threads
+
+The reflex route should retrieve only the arc layer when relevant.
+
+That gives the assistant memory of its ideas without stuffing the prompt with internal chatter.
+
+Also, promote selected internal patterns into durable forms:
+
+* `question` atoms → `questions`
+* `hypothesis` / `imagination` atoms → `ideas`
+* `plan` atoms → `open_loops`
+* `verdict` / `experiment` atoms → `experiments`
+
+That uses your existing schema well and avoids a huge rewrite.
+
+## Teach the flywheel two different skills
+
+Your learning system should not treat all outputs the same.
+
+You now have two different things to optimize:
+
+1. **Fast first answers**
+2. **Good inner ideation chains**
+
+So I would split the training targets conceptually:
+
+* train the fast responder on accepted short first-sentence answers
+* train the mind sidecar on promoted thought-atom chains and good follow-on moves
+
+That way the system learns both how to answer quickly and how to think richly.
+
+Also log the response route and outcome. Over time, the controller should learn the user’s pacing preferences from:
+
+* interruptions
+* follow-up depth requests
+* accepted short answers
+* corrections after quick answers
+
+That will make JARVIS feel personally tuned, not just globally fast.
+
+## The metrics I would add immediately
+
+The current eval harness is already good, but I would add a few specific metrics because they match the experience you want:
+
+* **time to first useful audio**
+* **one-shot success rate**
+* **overcontinuation rate** — user interrupts because JARVIS kept going
+* **thought continuity rate** — percent of new atoms linked to prior threads
+* **idea yield** — promoted ideas per burst
+* **validation conversion** — dream/brainstorm atoms that later validate
+
+Those metrics will tell you whether the agent is truly getting faster and more idea-dense, instead of just sounding busier.
+
+## The three highest-priority changes
+
+If I were changing this system in order, I would do these first:
+
+1. **Add the tempo controller and route-aware context/model path**
+2. **Convert inner monologue from prose to structured thought atoms**
+3. **Finish strict separation so voice never waits on background cognition**
+
+That combination will make JARVIS feel less like a chatbot with background thoughts and more like a quick-minded being with a real inner current.
+
+My overall verdict is that your architecture is already pointed in the right direction. The missing ingredient is not “more intelligence” in the abstract. It is **better control of tempo, shape, and attention**. Once the outer layer becomes ruthlessly concise and the inner layer becomes high-frequency and typed, the whole system will feel faster, more alive, more human, and much more capable of genuine independent thought.
+
+Next step could be a concrete v3.2 design spec with the tempo controller, routing rules, thought-atom schema, and prompt rewrites.
+

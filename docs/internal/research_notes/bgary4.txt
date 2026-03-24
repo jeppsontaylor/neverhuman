@@ -1,0 +1,630 @@
+Yes — this updated plan is the strongest one so far. It is much closer to a buildable operating blueprint than a design essay.
+
+## Scores
+
+For continuity, my earlier scores stay the same:
+
+* AI-1: **91**
+* AI-2: **90**
+* AI-3: **88**
+* AI-4: **92**
+* AI-5: **90**
+* My pooled vNext plan: **96**
+
+Your new **JARVIS v4 — Definitive Upgrade Plan**: **97/100**
+
+I would not give it 100. It is excellent, but there are still a few important gaps and a couple of places where it may break in practice.
+
+## Why I score the updated plan 97
+
+It nails almost everything from the original brief:
+
+* floor sovereignty is now explicit
+* background mind is separated from turn-owned thinking
+* self-model answers become truthful instead of generic
+* user-change requests are typed into live setting vs code patch
+* self-edit has real git isolation, tests, replay, and rollback
+* code navigation has structure
+* warm A/B deployment is finally operational, not just aspirational
+
+That said, I would still change several things before calling it final.
+
+# The most direct changes I would make
+
+## 1. Add `TurnResolution` and clear turn debt from resolution, not just `tts_finished`
+
+This is the first thing I would change.
+
+Right now the plan still implies that the user’s turn debt is mostly tied to audio completion. That is not quite right. The floor and the obligation are related, but they are not the same thing.
+
+A turn can end as:
+
+* `answered`
+* `superseded`
+* `aborted`
+* `error`
+* `timeout`
+
+So I would add:
+
+```python
+class TurnResolution(str, Enum):
+    ANSWERED = "answered"
+    SUPERSEDED = "superseded"
+    ABORTED = "aborted"
+    ERROR = "error"
+    TIMEOUT = "timeout"
+```
+
+And then make `pending_user_turn_id` clear only when an explicit resolution is recorded.
+
+Why this matters:
+
+* if the user barges in and asks something new, the old turn is `SUPERSEDED`
+* if the model errors, the turn is `ERROR`
+* if playback finishes, that only closes the audio floor, not necessarily the obligation model
+* if the assistant gave a short text fallback before TTS, that may already satisfy the turn
+
+This will prevent subtle deadlocks and false “still pending” states.
+
+---
+
+## 2. Split background eligibility into two levels, not one
+
+Your `TRULY_IDLE` gate is correct for anything that can surface or speak.
+
+But for the original complaint — “it isn’t showing internal dialogue and it isn’t pursuing its own mission” — your current gating may become too strict.
+
+If Ambient Mind only runs in `TRULY_IDLE`, and `TRULY_IDLE` only arrives after cooldown plus engaged silence, the system may stay cognitively too quiet for too long.
+
+I would split it:
+
+### `silent_background_eligible`
+
+Allowed in `ENGAGED_SILENCE`, but only for:
+
+* non-speaking
+* no initiative
+* fully preemptible
+* no shared `llm_gate` contention
+* ideally only in remote sidecar mode
+
+### `surface_background_eligible`
+
+Allowed only in `TRULY_IDLE`
+
+* initiative allowed
+* spoken surfacing allowed
+* richer mind rendering allowed
+
+That gives you the best tradeoff:
+
+* the user never loses the floor
+* the system can still quietly pursue quests and internal work
+* the Mind Inspector can show real background activity sooner
+* spoken initiative remains tightly gated
+
+This is a major improvement because it better matches the original ask without reintroducing the old bug.
+
+---
+
+## 3. Add a first-class `Quest Board`
+
+This is the biggest missing conceptual subsystem.
+
+Your plan has roles, questions, experiments, mission weights, and rewards. Good. But it still doesn’t give JARVIS a central object for “what am I actively pursuing?”
+
+That is why I would add a first-class `quests` layer.
+
+Something like:
+
+```sql
+CREATE TABLE quests (
+    id UUID PRIMARY KEY,
+    title TEXT NOT NULL,
+    domain TEXT NOT NULL,          -- science|system|user|self
+    source TEXT NOT NULL,          -- user|mind|repair|change_request
+    status TEXT NOT NULL,          -- open|active|blocked|validated|archived
+    priority REAL DEFAULT 0.5,
+    evidence_refs JSONB DEFAULT '[]',
+    next_action TEXT,
+    reward_score REAL DEFAULT 0.0,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+```
+
+And then make:
+
+* Researcher act on quests
+* Mechanic create repair quests
+* Scientist create validation quests
+* Self-model report top active quests
+* Mind Inspector show active quest threads
+
+This is what makes the internal dialogue feel like a real mind instead of scattered pulses.
+
+Instead of “I hear the weight in your words,” the mind becomes:
+
+* “Quest: fix idle-fire bug”
+* “Quest: follow cosmology curiosity thread”
+* “Quest: reduce response latency in deep turns”
+* “Quest: convert repeated change requests into live settings”
+
+That is much closer to what you asked for.
+
+---
+
+## 4. Add a real knowledge-acquisition loop, not just better internal thought
+
+This is the largest functional gap relative to the original prompt.
+
+You asked for a system that pursues interesting ideas and ideally new knowledge.
+
+Right now the updated plan gives it:
+
+* quests
+* lanes
+* agenda
+* rewards
+
+But it still mostly thinks using what it already knows.
+
+That is not enough if you want “focus on science” to become genuinely impressive.
+
+You need a **Research Sandbox** or **Explorer subsystem**.
+
+At minimum:
+
+* local paper / notes / docs search
+* codebase search
+* web research when allowed
+* source-backed claim extraction
+* experiment planning
+* evidence cache
+
+Without that, “science mission” risks becoming “science-flavored rumination.”
+
+I would add:
+
+* `research_jobs`
+* `evidence_cache`
+* `source_claims`
+* `quest_sources`
+
+And give the Researcher lane a tool path:
+
+* search
+* fetch
+* summarize
+* cite
+* validate
+* convert into claim or experiment
+
+This one addition would massively improve the “interesting new knowledge” side of the brief.
+
+---
+
+## 5. Add `PresenceConfidence` and `SocialBudget` as first-class subsystems
+
+You mention anti-neediness through `initiative_restraint`, but that is still too thin.
+
+Human-like initiative needs two things:
+
+* is the user probably present and receptive right now?
+* how much unsolicited interaction has been welcome lately?
+
+So I would add:
+
+### `PresenceConfidence`
+
+Derived from:
+
+* websocket health
+* recency of user activity
+* tab visibility if available
+* mic availability
+* recent interactions
+* explicit user preference
+
+### `SocialBudget`
+
+Tracks:
+
+* unsolicited attempts
+* accepted initiatives
+* ignored initiatives
+* interrupted initiatives
+* time-of-day patterns
+* user tolerance profile
+
+Then make `initiative_worker` require:
+
+* `presence_confidence > threshold`
+* `social_budget.remaining > 0`
+* no pending user turn
+* `surface_background_eligible == True`
+
+That will make initiative much more human-like and much less annoying.
+
+---
+
+## 6. Don’t silently drop failed initiative candidates — archive or defer them
+
+Right now the new `initiative_worker()` silently drops a candidate when the floor is no longer idle.
+
+I would change that.
+
+A good initiative candidate is useful cognition. Losing it is wasteful.
+
+Instead:
+
+* mark it `deferred`
+* attach `drop_reason`
+* either re-score later or convert it into a quest/artifact
+
+Example:
+
+* user returns before the system can speak
+* the thought gets demoted into a `deferred_initiative`
+* maybe it later becomes a better-timed follow-up
+* or just remains part of the quest history
+
+This preserves inner continuity.
+
+---
+
+## 7. Move executable invariants earlier in the order
+
+Your phase order is strong, but I would move `spec/invariants.yaml` and the replay harness earlier.
+
+Not Phase 4.
+Phase 0 or immediately after Phase 0.
+
+Reason:
+once you start wiring the new floor machine and two-minds split, you want the invariants guarding every subsequent refactor.
+
+So I would do:
+
+* Phase 0A–E: floor sovereignty
+* **Phase 0F–G: invariants + replay harness**
+* then Phase 1 onward
+
+That way the refactor, mind rewrite, self-pack, and forge are all protected by the same sacred rules from the start.
+
+---
+
+## 8. Add a `public_thought_stream` separate from `inner_voice`
+
+The updated plan correctly says `inner_voice` is never spoken. Good.
+
+But the original ask also wants JARVIS to actually show internal dialogue and not feel empty.
+
+The answer is not exposing raw chain-of-thought.
+The answer is exposing a **curated public thought stream**.
+
+So I would add:
+
+* `inner_voice` — private
+* `frames` — structured internal objects
+* `public_thought_stream` — safe, concise, user-viewable summaries
+* `initiative_candidate.draft` — speechable path only
+
+This gives you a way to show:
+
+* “I’m tracking a bug in my idle timing”
+* “I’m following a cosmology question”
+* “I’m testing a faster response profile”
+  without leaking raw reasoning or unstable scratchpads.
+
+That is the right compromise.
+
+---
+
+## 9. Add session-state handoff for A/B swaps
+
+This is a major operational concern.
+
+Your blue-green control plane is right.
+But if the swappable reflex process holds:
+
+* in-memory history
+* affect
+* recent mind frames
+* floor state
+* short-term mission/session overlay
+
+then a swap may feel like a mini amnesia event.
+
+That would undercut the whole illusion of continuity.
+
+So before Phase 8, I would add a minimal **session checkpoint** layer for:
+
+* current session history window
+* floor state
+* pending turn state
+* affect snapshot
+* session overlay
+* current voice / runtime prefs
+
+Then:
+
+* routerd can hand the session to B cleanly
+* or at minimum restore recent context after reconnect
+
+Without this, self-edit will work technically but feel jarring.
+
+---
+
+## 10. Add a schema-migration firewall
+
+This one is important.
+
+Your Forge is allowed to patch app code, but what happens if a change implies a schema change?
+
+That is dangerous territory.
+
+I would explicitly forbid autonomous destructive migrations and strongly limit autonomous schema changes to:
+
+* additive columns
+* additive tables
+* additive indexes
+* backward-compatible changes only
+
+Anything else should require human approval.
+
+Also:
+
+* candidate B should not run irreversible migrations automatically
+* replay harness should use shadow schema or cloned DB where needed
+
+This prevents one of the worst self-edit failure modes.
+
+---
+
+## 11. Add resource arbitration for Forge and Mind
+
+This is a serious practical risk on a local Mac.
+
+Candidate testing, replay, Code Atlas refresh, and background cognition can easily fight with:
+
+* live reflex latency
+* ASR
+* TTS
+* llmd
+
+So I would add a small `ResourceArbiter` or extend the existing resource-broker idea to cover:
+
+* Forge test runs
+* replay harness
+* code indexing
+* mind background lanes
+
+Rules:
+
+* live conversation always wins
+* heavy self-edit runs happen only in maintenance mode or at low priority
+* remote mind gets preempted instantly
+* replay/testing jobs get paused if the user becomes active
+
+Otherwise the system may feel slower exactly when you are trying to make it smarter.
+
+---
+
+## 12. Make `SELF_PACK` runtime-probed, not just compiled
+
+The updated plan’s `self_manifest.json` is good, but I would avoid treating it as static truth.
+
+It should be:
+
+* compiled from docs/manifests
+* then **validated by live probes**
+
+For example:
+
+* is `mindd` actually reachable?
+* are `asrd` and `ttsd` really warm?
+* what is the active slot?
+* what commit is live?
+* which features are actually enabled?
+
+Otherwise JARVIS may confidently answer with stale self-knowledge after a partial deployment or failed restart.
+
+---
+
+## 13. Put versioned API contracts between `reflexd` and long-lived daemons
+
+Once you externalize ASR/TTS into persistent daemons, you introduce a new class of breakage:
+interface drift.
+
+So I would add:
+
+* `api_version`
+* `capabilities`
+* compatibility check on boot
+
+Candidate B should not promote if it expects an ASR/TTS/LLM interface that the warm daemons do not implement.
+
+This is a very practical failure mode in blue-green systems.
+
+---
+
+## 14. Make the Code Atlas auto-refresh from real analysis, not just manifests
+
+The schema is good. The risk is freshness drift.
+
+I would make Code Atlas built from:
+
+* AST/tree-sitter extraction
+* imports/call graph
+* coverage output from tests
+* curated summaries only as metadata
+
+And refresh it:
+
+* on boot
+* after every successful self-edit
+* incrementally for touched files
+
+Otherwise the Forge may target stale files or the wrong tests.
+
+---
+
+## 15. Add “literal-first” answer contracts for the exact classes of turns that failed
+
+To feel more human, JARVIS should often be more direct, not more ornate.
+
+For:
+
+* `meta_self`
+* `change_request`
+* `emotional_probe`
+* `repair`
+
+I would add a response contract:
+
+1. first sentence answers literally
+2. second sentence may add self-aware nuance
+3. third sentence may offer a follow-up
+
+That would have prevented the current pathological tone.
+
+For example:
+“What do you think about when I’m not talking to you?”
+should begin with:
+“Mostly I review open questions, active quests, and ways to improve my behavior.”
+
+Not:
+“The silence between us can feel heavy…”
+
+That one policy would make the system feel dramatically saner.
+
+# Major concern
+
+The biggest remaining concern is this:
+
+**The plan gives JARVIS a much better cognitive harness, but it still does not fully give it a true knowledge-acquisition engine.**
+
+That matters because your original brief was not just:
+“be more self-aware.”
+
+It was:
+“pursue interesting ideas worth pursuing, ideally new knowledge.”
+
+Without a research sandbox, citations, source-backed evidence intake, and quest-driven exploration, the system can still become a beautifully structured introspective machine that mostly rearranges what it already knows.
+
+That would be a real limitation.
+
+So if I had to add one brand-new subsystem beyond your current plan, it would be:
+
+## `explorerd` or `researchd`
+
+A tool-enabled research service that can:
+
+* search trusted sources
+* read local corpora
+* attach evidence to quests
+* propose experiments
+* turn discoveries into validated claims
+
+That would make science mode genuinely exciting.
+
+# What might break
+
+The most likely breakpoints I see are these:
+
+### 1. Floor-state deadlocks
+
+A richer state machine is better, but also easier to wedge.
+Dropped `tts_finished`, barge-ins, errors, and superseded turns can leave the floor in a bad state unless `TurnResolution` is explicit.
+
+### 2. Swap-time memory loss
+
+Blue-green will feel bad if short-term session state lives only in-process.
+
+### 3. Replay flakiness
+
+Replaying “last 10 real sessions” can become nondeterministic and fragile unless sanitized and stabilized. I would separate:
+
+* deterministic golden fixtures
+* optional shadow replay
+
+### 4. Resource contention
+
+Forge + replay + code indexing on a local machine can hurt live latency unless carefully budgeted.
+
+### 5. Stale Code Atlas
+
+If Atlas lags the repo, self-edit planning gets dangerous.
+
+### 6. Contract drift with external daemons
+
+Once ASR/TTS are warm external services, interface mismatches become a real source of subtle failures.
+
+### 7. Over-suppressing the ambient mind
+
+If you gate too hard, the system becomes technically correct but still feels mentally quiet. That is why I strongly recommend silent background leases during `ENGAGED_SILENCE`.
+
+### 8. Schema-change accidents
+
+Autonomous app edits can implicitly depend on DB changes. Without a migration firewall, that can get ugly quickly.
+
+# New ideas I would add
+
+These are the highest-leverage additions not fully present in the updated plan.
+
+## A. Quest Board
+
+Top active quests, visible in Mind Inspector and Self Pack.
+
+## B. Silent vs surfaced background leases
+
+Lets the mind stay alive without stealing the floor.
+
+## C. `TurnResolution`
+
+Separates “audio finished” from “turn obligation resolved.”
+
+## D. Research Sandbox
+
+Critical for real new knowledge and science mission.
+
+## E. Public Thought Stream
+
+Safe internal-dialogue visibility without raw chain-of-thought leakage.
+
+## F. Session checkpointing
+
+Makes self-edit and A/B swaps feel continuous.
+
+## G. Migration firewall
+
+Protects Memory Spine from autonomous overreach.
+
+## H. Resource Arbiter
+
+Keeps all this from hurting live latency.
+
+# Revised verdict
+
+Your updated plan is the best one in the set.
+
+It is more concrete than my earlier pooled plan, and it is much closer to something an engineering team could actually execute.
+
+My revised scoring is:
+
+* My earlier pooled plan: **96/100**
+* Your updated JARVIS v4 plan as written: **97/100**
+* Your updated JARVIS v4 plan with the changes above: **99/100**
+
+The last missing point is mostly the research / quest / acquisition side. Once JARVIS can:
+
+* hold quests,
+* quietly pursue them,
+* gather evidence,
+* explain itself truthfully,
+* safely modify itself,
+* and keep continuity across swaps,
+
+then it stops feeling like a good assistant with decorative introspection and starts feeling like a real cognitive system with a life of its own.
+

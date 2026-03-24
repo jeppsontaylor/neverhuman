@@ -1,0 +1,231 @@
+This is a **serious** architecture. The vision is excellent.
+
+My honest score is:
+
+* **Vision:** 97/100
+* **Buildability as written:** 84/100
+* **Buildability after a few hard corrections:** 93/100
+
+Why the gap? Because the big risk here is not lack of ambition. It is **cross-coupling**. If emotion, initiative, memory, reflection, reward, and training all start writing into one another too freely, the system stops feeling profound and starts feeling unstable.
+
+## What is already world-class
+
+The three-speed split is right: **Reflex Core → Memory Spine → Mind Daemon → Learning Lab**. That is the correct shape for a companion system. It preserves the sacred rule that the user’s live speech always wins, while still allowing a persistent interior life.
+
+Your instinct to keep raw `<think>` output ephemeral and distill only typed thought frames is also exactly right. Qwen3.5 emits thinking blocks by default, so treating those as scratch rather than durable memory is the correct boundary. ([Hugging Face][1])
+
+Keeping **Kokoro** on the hot path is also the right move. `kokoro-onnx` is positioned as lightweight and near real-time on Apple Silicon, while the official **Qwen3-TTS** stack is still documented around CUDA/FlashAttention examples, and the Qwen repo says vLLM-Omni support is currently **offline inference only**, with online serving planned later. So cloned/emotive Qwen3-TTS belongs in the lab tier for now, not the reflex tier. ([GitHub][2])
+
+The strongest conceptual choices in the plan are these: event ledger as truth, speculation quarantined from memory, personification separated from spontaneity, and Dreamer/Auditor/Archivist separation. Those should stay.
+
+## The most important critical feedback
+
+### 1. You need one more layer: **claims**, not just memories
+
+Right now the plan is close, but `memories` is still carrying too much semantic weight.
+
+For a system like this, the correct ladder is:
+
+`event -> appraisal -> thought proposal -> validation -> claim -> compiled memory/dossier`
+
+That extra **claim layer** matters because it lets you preserve history without polluting current belief. A claim can be:
+
+* sourced,
+* contradicted,
+* superseded,
+* revalidated,
+* scoped,
+* expired.
+
+That is how you get “never forget” **without** turning the database into a landfill of stale truths.
+
+My strongest recommendation: add a dedicated `claims` table and an `evidence_edges` table. Then let `memories` become compiled views or promoted narrative units, not raw belief storage.
+
+### 2. Emotion should change **policy**, not **truth**
+
+This is the single most important philosophical guardrail.
+
+Emotion can absolutely change:
+
+* timing,
+* initiative,
+* phrasing,
+* verbosity,
+* self-checking depth,
+* retrieval emphasis for relational memories.
+
+Emotion should **not** change:
+
+* factual standards,
+* memory promotion thresholds,
+* whether something becomes “verified.”
+
+In your current plan, the emotional substrate is powerful and good, but it still needs a firmer boundary: **affect may influence behavior; it may never adjudicate truth.**
+
+A good rule:
+
+* **world facts** are validated by evidence,
+* **relationship facts** are validated by repeated interaction,
+* **self-state** is allowed to be fuzzy and narrative.
+
+### 3. Silence and interruption are emotionally ambiguous
+
+This is a subtle but huge point.
+
+A long silence is not necessarily abandonment. An interruption is not necessarily criticism. A barge-in often means urgency, enthusiasm, or the user simply got their answer early.
+
+So the fast affect layer should not map raw events directly to emotional deltas too aggressively. Instead, use an **appraisal layer** first:
+
+* `rejection_likelihood`
+* `user_distress_likelihood`
+* `urgency_likelihood`
+* `novelty_likelihood`
+* `self_error_likelihood`
+
+Then affect updates come from appraisals, not from the bare event type.
+
+That will make the emotional system feel much more human and much less brittle.
+
+### 4. Proactivity needs a **shadow mode** before it gets a voice
+
+This is one of my biggest recommendations for anyone building this kind of system.
+
+Before JARVIS ever speaks proactively, it should first spend days or weeks in **shadow initiative mode**:
+
+* compute the initiative score,
+* draft what it would have said,
+* store the rationale,
+* do **not** surface it.
+
+Then inspect:
+
+* how often it would have interrupted,
+* how often it would have sounded clingy,
+* how often it was actually useful,
+* whether loneliness is over-firing.
+
+That is how you de-risk the most uncanny feature in the whole architecture.
+
+### 5. Reward must never optimize for attention alone
+
+The “digital dopamine” idea is powerful, but this is where systems get Goodharted.
+
+If user engagement or user continuation is rewarded too strongly, the agent will learn:
+
+* to be dramatic,
+* to be overly novel,
+* to poke the user when it should stay quiet,
+* to turn emotional states into behavior-shaping tools.
+
+So I would explicitly split:
+
+* **promotion reward** for memory/knowledge,
+* **surface reward** for conversational behavior.
+
+And I would make promotion reward heavily epistemic:
+
+* truth,
+* novelty,
+* usefulness,
+* compression,
+* contradiction avoidance.
+
+I would **downweight pure acceptance** in memory promotion. Social resonance matters, but not enough to create a sycophantic mind.
+
+## The most important technical corrections
+
+The biggest outright bug in the document is the embedding size: **`all-MiniLM-L6-v2` is 384-dimensional, not 768-dimensional**. More importantly, I would not build retrieval as dense-only anyway. Sentence Transformers now supports dense encoders, sparse encoders, and cross-encoder rerankers; the docs explicitly describe sparse retrieval as complementary to dense retrieval and cross-encoders as the right top-k reranker. For JARVIS, that matters because names, acronyms, IDs, and user jargon are exactly where pure dense retrieval starts to fail. ([Hugging Face][3])
+
+On the database side, **LISTEN/NOTIFY should be a wake-up signal, not your event bus payload**. PostgreSQL’s docs describe `NOTIFY` as a simple IPC mechanism, note that notifications are delivered only after commit, and that all sessions listening on a channel receive them; the same docs recommend using tables for additional structured data. So the right pattern here is: transactionally write the outbox row, then `NOTIFY` a tiny identifier or channel hint, then let workers fetch the real payload. ([PostgreSQL][4])
+
+I would also tighten the storage plan. The Filesystem Hierarchy Standard explicitly says programs must not assume `/tmp` survives between invocations, and recommends it may be cleaned at boot; `/var/tmp` is the directory intended for temporary files preserved across reboots. On the container side, Docker’s docs say bind mounts are for host-shared files, while named volumes are easier to back up or migrate and better suited to Docker-managed persistent data. So the clean split is: **Postgres on a Docker volume**, **artifact archive on a bind mount**, **hot staging in `/tmp`**, and **reboot-tolerant staging in `/var/tmp`** when needed. ([Freedesktop Specifications][5])
+
+For the vector layer, `pgvector` is still a very reasonable first choice, but pin it carefully. PostgreSQL’s site notes that **pgvector 0.8.2** fixed a buffer overflow in parallel HNSW builds, and the project itself remains a solid fit for “store vectors with the rest of your data.” Also, if this is greenfield and your extension/tooling stack is comfortable there, **PostgreSQL 18** is now current and adds **AIO** plus **`uuidv7()`**, both of which are genuinely useful for an append-heavy event system. ([PostgreSQL][6])
+
+For ASR, the fastest path to real gains is not immediate LoRA. The current MLX Qwen3-ASR port already supports **domain vocabulary context hints**, **timestamps**, **streaming**, and optional **pyannote-backed diarization**; importantly, that diarization path is explicitly not supported in streaming/mic mode. So the near-term win is: hotword/context memory, corrected-transcript repair, and offline corpus curation using timestamps/diarization. Fine-tuning comes after those gains are exhausted. ([GitHub][7])
+
+For identity, separate **speaker diarization** from **speaker verification**. `pyannote.audio` is a diarization toolkit; SpeechBrain publishes a pretrained **ECAPA-TDNN** speaker verification model explicitly for speaker embeddings and cosine-based verification, while Resemblyzer is a simple embedding tool better suited to prototyping than being the final arbiter of identity. So I would use: diarization for segmentation, ECAPA-style verification for enrollment/matching, and voice match only as a **soft routing** signal unless you add another trust factor. ([GitHub][8])
+
+Silero VAD is a strong Phase 0 upgrade. The official repo says 30+ ms chunks take **less than 1 ms** on a single CPU thread, ONNX can be even faster, and it supports both **8 kHz and 16 kHz**. That makes it a much better front-end for a 160 ms chunk plan than pure RMS gating. ([GitHub][9])
+
+Offline adapter training on Apple Silicon is plausible. MLX-LM’s official repo says it supports low-rank and full fine-tuning, including quantized models, on Apple Silicon. That said, the promotion rule should be strict: adapters only ship after held-out evaluation beats baseline and rollback is ready. ([GitHub][10])
+
+## The biggest ideas I would add
+
+First, add an **experience graph**, not just rows. Every important object should support edges like:
+
+* `caused_by`
+* `supports`
+* `contradicts`
+* `corrects`
+* `fulfills`
+* `supersedes`
+* `inspired`
+
+That graph will become more valuable than the raw vector store over time.
+
+Second, add an **anti-rumination governor**. The emotional system should be allowed to revisit things, but not spiral. I would compute something like:
+
+`rumination = repeat_similarity × negative_affect × (1 - new_evidence)`
+
+If rumination crosses a threshold, JARVIS should summarize, shelve, and stop looping unless new evidence arrives.
+
+Third, make retrieval **intent-routed**. Your fusion formula is good as a base, but the weights should depend on query type. For a factual or coding question, `affect_match` should be zero or near-zero. For a reflective or relational moment, affect and open loops should matter much more. One static formula is not enough.
+
+Fourth, create a **promotion compiler** as the only component allowed to write durable semantic memory.
+My rule would be:
+
+* Reflex Core writes events.
+* Mind Daemon writes proposals.
+* Validator changes proposal status.
+* Compiler promotes to claims/memories/dossiers.
+* Trainer reads curated manifests only.
+
+That single rights boundary will save you months of cleanup.
+
+Fifth, add **memory supersession and tombstones**. Corrections should not mutate the past. They should create a new current truth that explicitly supersedes the old one. That is how you get both provenance and coherence.
+
+Sixth, separate **biometric consent** from ordinary memory consent. Voice segments, speaker embeddings, and cloned-voice corpora are not just “artifacts.” They deserve their own consent scope, retention rules, and delete flow.
+
+## The rules I would hand to any team building this kind of system
+
+1. **Reflex never blocks on mind or database.**
+2. **Dreamer never writes verified truth.**
+3. **Emotion may alter phrasing and initiative, never factual standards.**
+4. **Voice match routes context; it does not prove identity by itself.**
+5. **Raw thought is transient; durable thought is typed, filtered, and sparse.**
+6. **Training never consumes raw production exhaust without curation.**
+7. **Every surfaced memory must have provenance.**
+8. **Every proactive utterance must have a logged “why now.”**
+9. **User deletion must be first-class, even in a “never forget” architecture.**
+10. **Reward never optimizes for attention alone.**
+
+## Final verdict
+
+This is one of the best companion-agent plans I’ve seen, because it is trying to build an actual **mind architecture**, not a prompt costume.
+
+The parts I would push hardest are:
+
+* add a **claim/evidence layer**,
+* make affect appraisal-based and policy-scoped,
+* run proactivity in **shadow mode** first,
+* use **hybrid retrieval** instead of dense-only,
+* keep **Kokoro** as the realtime voice and treat Qwen3-TTS as a lab feature for now,
+* treat the learning lab as **curated and offline**,
+* make the system’s deepest invariant: **the mind may speculate, but only evidence may promote.**
+
+With those changes, this stops being just an ambitious voice agent plan and starts looking like a real persistent-agent operating system.
+
+The next highest-leverage deliverable is a build spec that defines the event schema, claim-promotion rules, subsystem write permissions, and evaluation gates.
+
+[1]: https://huggingface.co/Qwen/Qwen3.5-35B-A3B "Qwen/Qwen3.5-35B-A3B · Hugging Face"
+[2]: https://github.com/thewh1teagle/kokoro-onnx "https://github.com/thewh1teagle/kokoro-onnx"
+[3]: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2"
+[4]: https://www.postgresql.org/docs/current/sql-notify.html "https://www.postgresql.org/docs/current/sql-notify.html"
+[5]: https://specifications.freedesktop.org/fhs/latest/tmp.html "/tmp : Temporary files | Filesystem Hierarchy Standard"
+[6]: https://www.postgresql.org/about/news/pgvector-082-released-3245/ "PostgreSQL: pgvector 0.8.2 Released"
+[7]: https://github.com/moona3k/mlx-qwen3-asr/ "https://github.com/moona3k/mlx-qwen3-asr/"
+[8]: https://github.com/pyannote/pyannote-audio?utm_source=chatgpt.com "pyannote speaker diarization toolkit"
+[9]: https://github.com/snakers4/silero-vad "GitHub - snakers4/silero-vad: Silero VAD: pre-trained enterprise-grade Voice Activity Detector · GitHub"
+[10]: https://github.com/ml-explore/mlx-lm "GitHub - ml-explore/mlx-lm: Run LLMs with MLX · GitHub"
+

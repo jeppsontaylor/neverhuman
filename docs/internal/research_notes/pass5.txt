@@ -1,0 +1,399 @@
+I studied v3 closely. The good news is the architecture is very close. The bad news is the two problems you called out are coming from a few hard contradictions in the live turn-control path, not from one bad threshold.
+
+The core issue is this:
+
+**JARVIS still does not have a fully authoritative turn supervisor.**
+
+Right now interruption, endpointing, mind pulses, filler audio, LLM streaming, and TTS queueing are all present, but they are not yet governed by one strict “speech onset wins immediately” mechanism.
+
+## What is actually causing the bad behavior
+
+First, the mind is still too close to the voice path.
+
+Your v3 doc says the target is a separate sidecar mind, but the “honest implementation” section still says background cognition can run as an embedded `mind_loop` inside `server.py`, and the env defaults still point `MINDD_LLM_URL` at the same `8088` LLM endpoint as the reflex model. That means even “remote” mind mode can still compete with the sacred voice model at the model layer. That is the single biggest structural reason interruption feels worse than it should.
+
+Second, the interrupt path is still mostly **chunk-paced** on the backend.
+
+You already corrected the docs to be honest about the server-side latency. That was the right move. With `CHUNK_SZ = 2560`, the transport cadence is **160 ms**, so any interrupt logic that waits for multiple full chunks will always feel sluggish. The only way to make interruption feel truly instant is to split the path in two: **client fast-stop first, server authoritative cancel second**.
+
+Third, your recording/endpoint logic is still trying to do two opposite jobs with one detector.
+
+Onset should be aggressive and fast. End-of-speech should be conservative and patient. If you use roughly the same style of detector for both, you get exactly the behavior you described: the assistant sometimes jumps in too early, or it cuts the user into two turns.
+
+Fourth, there is still not enough **generation/epoch discipline** across the turn lifecycle.
+
+When the user speaks, every older thing should become stale at once:
+
+* current SSE stream
+* current TTS queue
+* filler audio
+* mind pulse
+* pending initiative
+* any late token/audio packet from the old turn
+
+Without that, the system may “mostly” cancel while still leaking old-turn behavior.
+
+## The most important change: add a Turn Supervisor
+
+This is the next major module.
+
+One small object should own the current turn epoch and all cancelable work:
+
+```python
+class TurnSupervisor:
+    epoch: int
+    active_turn_id: str | None
+    active_llm_response: object | None
+    active_tasks: set[asyncio.Task]
+    active_tts_generation: int
+    active_filler_generation: int
+
+    async def preempt(self, reason: str) -> int:
+        self.epoch += 1
+        interrupt_event.set()
+        mind_interrupt.set()
+        cancel_all_tasks_for_old_epoch()
+        abort_llm_stream_if_open()
+        tts_queue.abort_old_generations(self.epoch)
+        filler_audio.abort_old_generations(self.epoch)
+        return self.epoch
+```
+
+Every emitted thing must carry the current epoch:
+
+* tokens
+* sentences
+* WAV frames
+* filler clips
+* initiative events
+* mind tokens
+
+If an event arrives with an old epoch, it gets dropped immediately.
+
+That alone will make the system feel much more deterministic.
+
+## The interrupt path should become duplex
+
+This is the best runtime change in the whole design.
+
+### Path A: client fast-stop
+
+Do not wait for the 160 ms transport chunk to decide that the user has started speaking. `AudioWorkletProcessor.process()` currently runs in **128-frame blocks**; at sixteen kilohertz that is about **8 ms** per block, so you can run a fast onset detector locally on **16–24 ms** windows and send an interrupt hint before the next full PCM chunk goes out. If you later move to a `SharedArrayBuffer` ring buffer for pre-roll and flags, MDN says that requires a **secure context** plus **cross-origin isolation** with the relevant COOP/COEP setup. ([MDN Web Docs][1])
+
+So the browser should do this:
+
+1. detect local onset in the worklet
+2. immediately mute playback locally
+3. send `interrupt_hint`
+4. keep buffering microphone audio
+5. let the server do the authoritative cancel and new-turn capture
+
+The important word is **mute**, not “wait for cleanup.”
+Do not rely on `stopAllAudio()` alone as the first audible action. Route playback through a master `GainNode` and slam it to zero immediately, then do queue cleanup afterward.
+
+### Path B: server authoritative cancel
+
+When `interrupt_hint` arrives:
+
+* increment epoch
+* set `interrupt_event`
+* set `mind_interrupt`
+* cancel the live turn task
+* close the live SSE response if open
+* mark all queued TTS/filler as stale
+* switch state to `capturing`, not just `listening`
+
+The key behavioral change is that interruption becomes a **capture transition**, not just a stop transition.
+
+## The current architecture should stop allowing mind/reflex contention
+
+This needs to become non-negotiable.
+
+### What I would change immediately
+
+Make production mode require all three:
+
+* `JARVIS_MIND_REMOTE=1`
+* `MINDD_LLM_URL != reflex LLM URL`
+* no mind use of `llm_gate`
+
+If those are not true, run with mind disabled or dev-only warnings.
+
+The current `3 × 2s` `llm_gate` acquisition loop is acceptable as a temporary guardrail, but it is not acceptable as a steady-state voice priority design. The user should never be able to get stuck behind mind work for anything like that duration.
+
+My blunt recommendation:
+
+* **remote sidecar + separate model endpoint** becomes the only supported production path
+* embedded mind becomes a debug mode only
+* same-origin model endpoint for mind becomes a startup error in production
+
+That one change will remove a whole class of racey behavior.
+
+## Redesign endpointing as a separate finite-state machine
+
+This is the second most important change.
+
+Right now you need **fast start** and **slow end**.
+
+Use a real endpoint FSM:
+
+```text
+LISTENING
+  -> CAPTURING         when onset is confirmed quickly
+
+CAPTURING
+  -> ENDPOINT_PENDING  when silence candidate appears
+
+ENDPOINT_PENDING
+  -> CAPTURING         if speech resumes within confirm window
+  -> FINALIZE          if silence remains stable long enough
+```
+
+### My recommended logic
+
+#### Onset
+
+Fast and aggressive:
+
+* use a short EMA over speech probability
+* confirm onset in roughly 32–64 ms
+* while assistant audio is playing, require stronger evidence until local playback is muted
+
+#### Endpoint
+
+Conservative:
+
+* do not finalize the utterance at first silence
+* enter `ENDPOINT_PENDING`
+* keep recording through a confirm window
+* if speech resumes, merge seamlessly back into the same utterance
+* only after confirm should you allow ASR/LLM handoff
+
+### Starting values I would use
+
+```python
+ONSET_CONFIRM_MS = 48
+SOFT_SILENCE_MS = 650
+ENDPOINT_CONFIRM_MS = 220
+HARD_SILENCE_MS = 1100
+MIN_UTTERANCE_MS = 250
+MERGE_GAP_MS = 300
+PREROLL_MS = 400
+```
+
+That means:
+
+* start fast
+* stop slow
+* rescue natural pauses
+* keep enough pre-roll to avoid clipping the beginning
+
+This is exactly what your current system is missing.
+
+## Add a rescue window before LLM handoff
+
+You said it perfectly: do not send to the LLM until you are sure the user is done.
+
+So make that explicit.
+
+After silence first qualifies as a candidate endpoint:
+
+* stay in `ENDPOINT_PENDING`
+* keep collecting audio
+* do **not** hand off to LLM yet
+* if speech resumes, merge
+* only after confirm do ASR → LLM
+
+If you want to win back some latency later, you can do **speculative ASR** during `ENDPOINT_PENDING` and discard it if speech resumes. But the first robust version should prioritize correctness over speculative cleverness.
+
+## Make endpointing adaptive to the user
+
+This is one of the smartest upgrades you can add.
+
+Different users pause differently. Some think in half-second fragments. Some speak in long flowing bursts. Some interrupt the assistant with quick interjections.
+
+So track a per-user pause profile:
+
+* p50 intra-utterance pause
+* p90 intra-utterance pause
+* barge-in frequency
+* median utterance length
+* clipped-start rate
+* split-utterance rate
+
+Then adapt the silence hang dynamically:
+
+```python
+soft_silence_ms = clamp(user_pause_p90 + 120, 550, 950)
+```
+
+That will make JARVIS feel much more “attuned” instead of rigid.
+
+## Add echo-aware barge-in during playback
+
+This is the high-leverage refinement after the basics land.
+
+When the assistant is speaking, the mic often contains:
+
+* true user speech
+* residual playback leakage
+* echo-cancellation artifacts
+
+Since the browser already knows exactly what audio it is playing, use that as a reference signal.
+
+Compute an interrupt score from:
+
+* speech-band energy in the mic
+* residual energy not explained by current playback
+* low correlation with current playback waveform
+* rapid onset shape consistent with live speech
+
+So the rule becomes:
+
+* if it sounds like **just the assistant**, suppress interrupt
+* if it sounds like **new human speech**, trigger fast-stop
+
+This will reduce false barge-ins and make “speak over JARVIS” much more reliable on speakers.
+
+## Fix filler audio so it helps instead of hurting
+
+Filler audio is a good idea, but only if it never becomes one more thing the user has to fight.
+
+I would change it like this:
+
+* do not play filler instantly after ASR every time
+* start a short timer, around 120–150 ms
+* if first real response audio is not ready by then, play filler
+* filler must be tagged with turn epoch
+* filler must mute instantly on client onset
+* filler should be very short and low-salience
+
+In practice, that means filler covers dead air without becoming a frequent source of echo, barge-in confusion, or audible interruption lag.
+
+## Use the browser to log actual audio reality, not requested settings
+
+Do not trust requested media constraints blindly. MDN documents that you can inspect the **actual applied** track settings through `MediaStreamTrack.getSettings()`, including `echoCancellation`, `noiseSuppression`, `autoGainControl`, `sampleRate`, and `latency`; requested constraints are not the same thing as confirmed settings, and AGC / noise suppression are not uniformly supported across browsers. For playback, request `latencyHint: "interactive"` and then inspect `AudioContext.baseLatency` and `outputLatency` instead of assuming the browser honored the latency target. ([MDN Web Docs][2])
+
+That means the UI dev panel should log, per session:
+
+* actual sample rate
+* actual input latency
+* actual echoCancellation state
+* actual noiseSuppression state
+* actual autoGainControl state
+* playback `baseLatency`
+* playback `outputLatency`
+
+This will make device-specific debugging dramatically easier.
+
+## Clean up the spec contradictions now
+
+There are a few places where the doc itself will cause implementation drift if not cleaned up:
+
+* `BARGEIN_FRAMES` is `2` in one place and `3` in another
+* mind is described as remote sidecar but also as embedded task
+* `MINDD_LLM_URL` still defaults to the reflex endpoint
+* barge-in metrics are partly target metrics and partly current metrics
+* initiative turns are still half treated like raw text overrides instead of first-class turn envelopes
+
+I would normalize these immediately, because right now they make it too easy for the code to be “correct relative to one section” and still wrong overall.
+
+## The exact runtime plan I would implement next
+
+### Step 1
+
+Freeze new cognition work until turn-control is fixed.
+
+No new dreams, no new validator logic, no new fancy initiative behavior until interruption and endpointing are solid.
+
+### Step 2
+
+Make voice preemption absolute.
+
+* production requires remote mind sidecar
+* production requires separate sidecar model endpoint
+* remove mind/reflex shared-model path from normal operation
+* remove reflex dependence on `llm_gate` in remote mode
+
+### Step 3
+
+Implement client fast-stop.
+
+* local onset detector in `processor.js`
+* immediate master-gain mute on onset
+* send `interrupt_hint`
+* keep buffering audio
+* correlate with current playback to suppress obvious echo
+
+### Step 4
+
+Add Turn Supervisor + epoch discipline.
+
+* every task/audio/token tagged with epoch
+* stale generation dropped everywhere
+* one cancel tree owns LLM, TTS, filler, mind, initiative
+
+### Step 5
+
+Replace current endpointing with a two-stage endpointer.
+
+* `CAPTURING`
+* `ENDPOINT_PENDING`
+* confirm window
+* merge if speech resumes
+* no LLM handoff until confirmed
+
+### Step 6
+
+Add adaptive user pause modeling.
+
+* learn pause distribution
+* tune hangover per user
+* separate normal-turn vs barge-in-turn thresholds
+
+### Step 7
+
+Upgrade metrics.
+
+Add these to the eval harness:
+
+* onset → local mute
+* onset → `interrupt_hint` send
+* `interrupt_hint` → server cancel
+* stale audio after onset
+* clipped-start rate
+* premature-endpoint rate
+* split-utterance rate
+* false barge-in during playback
+* mind/reflex contention incidents
+
+## My strongest recommendation
+
+Do not treat this as “tune VAD a little.”
+
+This is a **turn-control redesign**.
+
+The right next version is one where:
+
+* the user’s speech onset is detected locally first
+* playback is silenced immediately
+* the server authoritatively cancels all old-turn work
+* the new utterance is captured under a separate epoch
+* endpointing is conservative and merge-friendly
+* mind work can never hold the voice path hostage
+
+That is what will make the system feel robust.
+
+Right now, the best next step is not more cognition. It is a **v3.1 Turn-Control Spec** with five concrete modules:
+
+* **TurnSupervisor**
+* **ClientOnsetDetector**
+* **EndpointManager**
+* **MindIsolationPolicy**
+* **EpochTaggedAudioQueue**
+
+That is the shortest path to a JARVIS that actually yields the instant the user starts talking.
+
+[1]: https://developer.mozilla.org/en-US/docs/Web/API/AudioWorkletProcessor/process?utm_source=chatgpt.com "AudioWorkletProcessor: process() method - Web APIs | MDN"
+[2]: https://developer.mozilla.org/en-US/docs/Web/API/MediaTrackSettings?utm_source=chatgpt.com "MediaTrackSettings - Web APIs | MDN"
+
