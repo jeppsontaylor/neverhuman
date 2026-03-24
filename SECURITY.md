@@ -14,7 +14,7 @@
 To report a vulnerability:
 
 1. Open a **private** GitHub Security Advisory at:  
-   `https://github.com/neverhuman/neverhuman/security/advisories/new`
+   `https://github.com/jeppsontaylor/neverhuman/security/advisories/new`
 
 2. Include:
    - A description of the vulnerability

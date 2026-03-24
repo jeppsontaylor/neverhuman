@@ -26,9 +26,9 @@ gary = "gary.server:main"
 neverhuman = "gary.server:main"
 
 [project.urls]
-Homepage = "https://github.com/neverhuman/neverhuman"
-Documentation = "https://github.com/neverhuman/neverhuman/blob/main/gary/ARCHITECTURE.md"
-Issues = "https://github.com/neverhuman/neverhuman/issues"
+Homepage = "https://github.com/jeppsontaylor/neverhuman"
+Documentation = "https://github.com/jeppsontaylor/neverhuman/blob/main/gary/ARCHITECTURE.md"
+Issues = "https://github.com/jeppsontaylor/neverhuman/issues"
 
 [tool.ruff]
 line-length = 100

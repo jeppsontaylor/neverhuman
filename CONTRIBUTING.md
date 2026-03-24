@@ -7,7 +7,7 @@ Thank you for your interest in contributing to GARY! This project is built to la
 ## Quick start
 
 ```bash
-git clone https://github.com/neverhuman/neverhuman.git
+git clone https://github.com/jeppsontaylor/neverhuman.git
 cd neverhuman
 python3 -m venv gary/.venv && source gary/.venv/bin/activate
 pip install -e ".[dev]"

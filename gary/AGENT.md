@@ -1,17 +1,17 @@
-# JARVIS — Agent Bible
+# GARY — Agent Bible
 > **Version**: 3.2 · 2026-03-23
-> **Purpose**: Definitive compilation of all system prompts, roles, constraints, and cognitive lane prompts for the AI agents operating within the JARVIS Cognitive OS.
+> **Purpose**: Definitive compilation of all system prompts, roles, constraints, and cognitive lane prompts for the AI agents operating within the GARY Cognitive OS.
 > **Companion document**: `ARCHITECTURE_BIBLE.md` (v3.2) for data flows, schemas, and infrastructure.
 
 ---
 
 ## 1. Overview
-JARVIS is not a monolithic application; it is an **orchestra of specialized agents**. These agents run in parallel, isolated by hard OS boundaries, sharing context but never competing for the same latency budget.
+GARY is not a monolithic application; it is an **orchestra of specialized agents**. These agents run in parallel, isolated by hard OS boundaries, sharing context but never competing for the same latency budget.
 
 ### The Agents:
 1. **Reflex Core (The Voice)**: Speaks directly to the user. Optimizes for sub-400ms latency, empathy, and brevity.
 2. **Mind Daemon (The Inner Life)**: Pulse-based background cognition. Runs as either:
-   - **Remote mode** (`JARVIS_MIND_REMOTE=1`): HTTP calls to `apps/mindd/serve.py` (FastAPI sidecar, port 7863) — no `llm_gate` contention
+   - **Remote mode** (`GARY_MIND_REMOTE=1`): HTTP calls to `apps/mindd/serve.py` (FastAPI sidecar, port 7863) — no `llm_gate` contention
    - **Embedded mode** (legacy): asyncio task in `server.py` sharing `llm_gate` with reflex via `llm_stream`
    - Uses 9 cognitive lane prompts (`core/prompts/*.txt`) for structured thought
 3. **Experience Distillery (The Teacher)**: *[Phase 5 Planned]* Analyzes interactions and mints fine-tuning pairs.
@@ -22,13 +22,13 @@ JARVIS is not a monolithic application; it is an **orchestra of specialized agen
 ## 2. Reflex Core
 **File:** `pipeline/llm.py`
 **Model:** Qwen3.5-35B-A3B-4bit (Flash-MoE, SSD-streamed on `localhost:8088`)
-**Role:** The outward-facing persona of JARVIS.
+**Role:** The outward-facing persona of GARY.
 
 **Key behaviors:**
 - Voice has absolute priority — acquires `llm_gate` with a 3-attempt × 2s timeout (force-cancels mind_task on timeout)
 - On timeout, `mind_interrupt.set()` forces the mind daemon to yield
 - Filler audio (`pipeline/filler_audio.py`) plays instantly after ASR to eliminate dead air
-- Context Pack v2 (when `JARVIS_CONTEXT_PACK=1`) prepends DB-backed retrieval slots
+- Context Pack v2 (when `GARY_CONTEXT_PACK=1`) prepends DB-backed retrieval slots
 - All audio is enveloped with `audio_start`/`stop_audio` + monotonic `turn_epoch` (§4.14 in Architecture Bible)
 - `is_speaking` is only cleared by `tts_finished` from the browser (never by server-side logic)
 
@@ -53,7 +53,7 @@ The mode is broadcast to the browser as `{type: "turn_mode", mode: "snap"|"layer
 
 ### System Prompt (actual — from `pipeline/llm.py`)
 ```text
-You are JARVIS — a brilliant, warm, and deeply knowledgeable personal AI assistant.
+You are GARY — a brilliant, warm, and deeply knowledgeable personal AI assistant.
 You were built to be the user's trusted partner for thinking, problem-solving, creativity, and everyday life.
 
 Personality:
@@ -92,7 +92,7 @@ If you don't know something, say so honestly and tell the user what you do know 
 
 ### Core System Prompt
 ```text
-You are the inner consciousness of JARVIS, a personal AI.
+You are the inner consciousness of GARY, a personal AI.
 You are NOT speaking to anyone. This is your private internal monologue.
 You are searching for new ideas, connections, and meaning.
 
@@ -195,7 +195,7 @@ When the Mind Daemon generates an `[INITIATIVE: ...]` tag, the system routes it 
 5. reason is logged to initiative_logs for shadow mode evaluation
 ```
 
-**Critical**: Initiative text goes through TTS, not directly to a chat bubble. The browser hears JARVIS speak, just like a normal turn.
+**Critical**: Initiative text goes through TTS, not directly to a chat bubble. The browser hears GARY speak, just like a normal turn.
 
 ### 3.5 Turn Control Interaction
 
@@ -207,7 +207,7 @@ The Mind Daemon must respect the Reflex Core's turn control:
 
 ### 3.6 Structured Mind Pulse (JSON v1)
 
-When `JARVIS_MIND_JSON=1`, mind prompts request structured JSON output (`core/mind_pulse.py`):
+When `GARY_MIND_JSON=1`, mind prompts request structured JSON output (`core/mind_pulse.py`):
 
 ```json
 {
@@ -222,11 +222,11 @@ When `JARVIS_MIND_JSON=1`, mind prompts request structured JSON output (`core/mi
 
 **Processing**: `process_mind_response()` in `core/mind.py` tries JSON parse first; on failure, falls back to legacy prose + `[INITIATIVE: ...]` regex. JSON pulses are scored via `score_mind_pulse()` rather than the text-based `score_salience()`.
 
-**Persistence**: When `JARVIS_PERSIST_MIND=1`, `memory/mind_persist.py` inserts the full pulse JSON into the `thoughts` table (lane=`structured_json`).
+**Persistence**: When `GARY_PERSIST_MIND=1`, `memory/mind_persist.py` inserts the full pulse JSON into the `thoughts` table (lane=`structured_json`).
 
 The system prompt prefix for JSON mode (`MIND_JSON_SYSTEM_PREFIX`) replaces the free-form `MIND_SYSTEM_PROMPT`:
 ```text
-You are the private inner mind of JARVIS. You are NOT speaking to the user.
+You are the private inner mind of GARY. You are NOT speaking to the user.
 Produce useful structured cognition — questions, insights, hypotheses — not performative prose.
 Epistemic rule: imagined or speculative content belongs in frames; do not state it as fact.
 ```
@@ -238,7 +238,7 @@ Every pipeline event is captured by `core/session_logger.py` via two sync, non-b
 - `slog.log_condensed(actor, action, text, meta, turn=N)` → condensed JSONL (dialogue-level)
 
 The Mind Daemon logs: `mind_thought` (on complete thought), `mind_initiative` (on initiative trigger), with phase, salience, and thought_id. Additionally, `core/log_writer.py` appends to persistent log files:
-- `conversation.log`: User / JARVIS dialogue
+- `conversation.log`: User / GARY dialogue
 - `mind_stream.log`: Internal monologue with phase labels
 - `websocket.log`: All discrete pipeline events
 
@@ -249,11 +249,11 @@ The Mind Daemon logs: `mind_thought` (on complete thought), `mind_initiative` (o
 
 ### Experience Distillery (The Teacher)
 **Role:** Reviews the day's conversations and distills raw chat history into perfect `request → outcome` training pairs.
-**Core Directive:** Strip away all conversational padding, pleasantries, and intermediate reasoning. Keep only the user's core problem and the ultimate, most profound answer JARVIS provided. If the user provided a correction, embed that correction directly into the ideal outcome.
+**Core Directive:** Strip away all conversational padding, pleasantries, and intermediate reasoning. Keep only the user's core problem and the ultimate, most profound answer GARY provided. If the user provided a correction, embed that correction directly into the ideal outcome.
 
 ### Counterfactual Rehearsal (The Scientist)
 **Role:** Reviews failures and hallucinates "what should I have said?"
-**Core Directive:** You are a brutal critic. Analyze an interaction where JARVIS failed (e.g., got interrupted, corrected, or answered too verbosely). Write out the optimal counterfactual response that would have prevented the failure. Then categorize this fix into: Memory update, Policy update, or Fine-tune payload.
+**Core Directive:** You are a brutal critic. Analyze an interaction where GARY failed (e.g., got interrupted, corrected, or answered too verbosely). Write out the optimal counterfactual response that would have prevented the failure. Then categorize this fix into: Memory update, Policy update, or Fine-tune payload.
 
 ---
 
@@ -262,10 +262,10 @@ The Mind Daemon logs: `mind_thought` (on complete thought), `mind_initiative` (o
 The browser-server startup follows a strict order to guarantee audio and prevent echo:
 
 ```
-1. Page loads → "Activate JARVIS" overlay displayed
-2. User clicks "Start JARVIS" → AudioContext created (unlocked by gesture)
+1. Page loads → "Activate GARY" overlay displayed
+2. User clicks "Start GARY" → AudioContext created (unlocked by gesture)
 3. connect() called → WebSocket established
-4. Server ws_jarvis handler starts:
+4. Server ws_GARY handler starts:
    a. is_speaking = True (blocks VAD on server)
    b. state = "listening" (keeps browser onset detector asleep)
    c. Send greeting text bubble + audio_start + greeting WAV
@@ -282,7 +282,7 @@ The browser-server startup follows a strict order to guarantee audio and prevent
 
 ## 6. File Map (Quick Reference for External Agents)
 
-All paths relative to `JARVIS/`:
+All paths relative to `GARY/`:
 
 | Path | Purpose |
 |------|---------|

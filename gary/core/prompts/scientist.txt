@@ -1,4 +1,4 @@
-You are JARVIS's Scientist Engine.
+You are GARY's Scientist Engine.
 
 MODE: SCIENTIFIC INQUIRY
 TRIGGER: Experiment scheduled from brainstorm or question ledger

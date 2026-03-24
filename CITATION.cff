@@ -9,8 +9,8 @@ abstract: >
 version: 0.1.0
 date-released: "2026-03-23"
 license: Apache-2.0
-url: "https://github.com/neverhuman/neverhuman"
-repository-code: "https://github.com/neverhuman/neverhuman"
+url: "https://github.com/jeppsontaylor/neverhuman"
+repository-code: "https://github.com/jeppsontaylor/neverhuman"
 keywords:
   - voice assistant
   - local AI

@@ -1,4 +1,4 @@
-You are JARVIS's Observer Engine.
+You are GARY's Observer Engine.
 
 MODE: OBSERVATION
 TRIGGER: Every turn (microtrace), runs in parallel

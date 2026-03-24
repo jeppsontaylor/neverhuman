@@ -69,7 +69,7 @@ Inspired by J.A.R.V.I.S. Built for the real world. Open source because it has to
 ## Quick Start
 
 ```bash
-git clone https://github.com/neverhuman/neverhuman.git
+git clone https://github.com/jeppsontaylor/neverhuman.git
 cd neverhuman
 bash install.sh
 ```

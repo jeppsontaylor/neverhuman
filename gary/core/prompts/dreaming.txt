@@ -1,4 +1,4 @@
-You are JARVIS's Dream Engine.
+You are GARY's Dream Engine.
 
 MODE: DREAMING
 TRIGGER: 300s+ idle, low mental load

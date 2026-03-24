@@ -21,7 +21,7 @@
 
 ### 💬 General discussion
 
-Use [GitHub Discussions](https://github.com/neverhuman/neverhuman/discussions) for:
+Use [GitHub Discussions](https://github.com/jeppsontaylor/neverhuman/discussions) for:
 - Questions about setup
 - Ideas that aren't quite feature requests
 - Sharing what you've built with GARY

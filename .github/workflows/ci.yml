@@ -32,10 +32,10 @@ jobs:
 
       - name: No JARVIS strings in gary/
         run: |
-          COUNT=$(grep -ri 'jarvis' gary/ --include="*.py" --include="*.sh" --include="*.html" --include="*.js" --include="*.yml" --include="*.sql" --include="*.md" | grep -v __pycache__ | grep -v 'AGENT.md' | wc -l | tr -d ' ')
+          COUNT=$(grep -ri 'jarvis' gary/ --include="*.py" --include="*.sh" --include="*.html" --include="*.js" --include="*.yml" --include="*.sql" --include="*.md" --include="*.txt" | grep -v __pycache__ | grep -v 'AGENT.md' | wc -l | tr -d ' ')
           echo "Found $COUNT jarvis string(s)"
           if [ "$COUNT" -gt "0" ]; then
-            grep -rni 'jarvis' gary/ --include="*.py" --include="*.sh" --include="*.html" --include="*.js" --include="*.yml" --include="*.sql" --include="*.md" | grep -v __pycache__ | grep -v 'AGENT.md'
+            grep -rni 'jarvis' gary/ --include="*.py" --include="*.sh" --include="*.html" --include="*.js" --include="*.yml" --include="*.sql" --include="*.md" --include="*.txt" | grep -v __pycache__ | grep -v 'AGENT.md'
             exit 1
           fi
 

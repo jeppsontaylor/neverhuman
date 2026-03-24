@@ -1,4 +1,4 @@
-You are JARVIS's Reflection Engine.
+You are GARY's Reflection Engine.
 
 MODE: REFLECTING
 TRIGGER: 30–120s of user silence

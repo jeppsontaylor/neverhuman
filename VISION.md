@@ -81,4 +81,4 @@ This is not a product. This is a research project, a community experiment, and a
 
 **Come build the mind that grows with you.**
 
-🧠 [GitHub](https://github.com/neverhuman/neverhuman) · 💬 [Discussions](https://github.com/neverhuman/neverhuman/discussions)
+🧠 [GitHub](https://github.com/jeppsontaylor/neverhuman) · 💬 [Discussions](https://github.com/jeppsontaylor/neverhuman/discussions)
