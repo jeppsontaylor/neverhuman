@@ -1,15 +1,15 @@
 # CODEOWNERS
 # These owners will be requested for review on all PRs.
 
-*  @neverhuman/maintainers
+*  @jeppsontaylor
 
 # Core pipeline — extra review for latency-sensitive code
-gary/pipeline/   @neverhuman/maintainers
-gary/core/       @neverhuman/maintainers
-gary/server.py   @neverhuman/maintainers
+gary/pipeline/   @jeppsontaylor
+gary/core/       @jeppsontaylor
+gary/server.py   @jeppsontaylor
 
 # Memory / database schema
-gary/memory/     @neverhuman/maintainers
+gary/memory/     @jeppsontaylor
 
 # Tests — no test coverage reduction without approval
-gary/testing/    @neverhuman/maintainers
+gary/testing/    @jeppsontaylor
