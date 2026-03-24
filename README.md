@@ -26,10 +26,10 @@ Persistent memory, local inference, and real-time voice interaction — fully on
 
 ## What makes it different
 
-* **Private by default** — runs entirely on your Mac; your data stays on your machine.
-* **Built for Apple Silicon** — optimized for efficient local inference with SSD-to-Metal streaming.
-* **Persistent memory** — stores and retrieves relevant context over time.
-* **Designed to adapt** — built for long-lived interaction, reflection, and personalization.
+* ![Private by default](https://img.shields.io/badge/Private_by_default-58a6ff?style=flat-square) — runs entirely on your Mac; your data stays on your machine.
+* ![Built for Apple Silicon](https://img.shields.io/badge/Built_for_Apple_Silicon-ff7b72?style=flat-square) — optimized for efficient local inference with SSD-to-Metal streaming.
+* ![Persistent memory](https://img.shields.io/badge/Persistent_memory-d2a8ff?style=flat-square) — stores and retrieves relevant context over time.
+* ![Designed to adapt](https://img.shields.io/badge/Designed_to_adapt-3fb950?style=flat-square) — built for long-lived interaction, reflection, and personalization.
 
 ---
 
@@ -103,12 +103,12 @@ See the [Local Development Guide](docs/getting-started.md) for:
 
 GARY is a voice-first local cognitive assistant built around persistent memory and long-lived interaction. Rather than behaving like a stateless chat window, GARY is designed to:
 
-* **listen** through a low-latency voice activity and speech pipeline
-* **speak** with fast local text-to-speech
-* **remember** through durable local memory and vector retrieval
-* **retrieve** context from structured Postgres-backed storage
-* **reflect** in the background while idle
-* **adapt** by consolidating patterns from repeated interaction
+* 🎧 **listen** through a low-latency voice activity and speech pipeline
+* 🗣️ **speak** with fast local text-to-speech
+* 🧠 **remember** through durable local memory and vector retrieval
+* 🔎 **retrieve** context from structured Postgres-backed storage
+* 💭 **reflect** in the background while idle
+* 🌱 **adapt** by consolidating patterns from repeated interaction
 
 ---
 
@@ -118,7 +118,7 @@ GARY is a voice-first local cognitive assistant built around persistent memory a
 
 The core loop is functional today, but APIs, UX, and runtime behavior are still evolving.
 
-### What works today
+### ✅ What works today
 
 * Real-time voice input and output
 * On-device inference and local memory vectorization
@@ -126,7 +126,7 @@ The core loop is functional today, but APIs, UX, and runtime behavior are still 
 * Background reflection and daemon tasks
 * Model selection during setup
 
-### On the roadmap
+### 🚧 On the roadmap
 
 * Deeper long-term adaptation and personalization
 * Richer personality shaping via the Humanity Slider
@@ -163,31 +163,31 @@ For implementation details, see the [Inference Runtime Guide](docs/inference-run
 
 ## Features
 
-### Interaction
+### 💬 Interaction
 
 * Real-time conversational pipeline
 * Natural local text-to-speech
 * Low-latency turn-taking and context retention
 
-### Memory
+### 💾 Memory
 
 * Searchable persistent memory
 * Semantic retrieval
 * Structured relationship storage
 
-### Runtime
+### ⚡ Runtime
 
 * Fully on-device model execution
 * Apple Silicon-optimized runtime
 * High-speed SSD-to-Metal streaming
 
-### Personalization
+### 🧬 Personalization
 
 * Memory growth over time
 * Adaptation from repeated interaction
 * Configurable personality boundaries
 
-### Privacy
+### 🔒 Privacy
 
 * No required cloud dependency
 * Local-only data processing
