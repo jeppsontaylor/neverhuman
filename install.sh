@@ -122,10 +122,10 @@ else
     echo "    cd /tmp/mac_flash_moe && make"
     echo "    cp build/infer $INFER_BIN"
     echo ""
-    echo "  flash-moe is the GPU inference engine for GARY's brain."
-    echo "  Without it, the LLM won't start — but you can still download models via the web setup."
+    echo "  flash-moe is the SSD-to-Metal GPU inference engine for GARY."
+    echo "  Without it, the local model won't start — but you can still download weights via the web setup."
     echo ""
-    warn "Continuing without flash-moe — you'll need to build it before GARY can talk."
+    warn "Continuing without flash-moe — you'll need to build it before GARY can run local inference."
 fi
 
 # ── 9. Create ~/.neverhuman ────────────────────────────────────────────────────

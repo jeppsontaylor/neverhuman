@@ -6,14 +6,15 @@ This document is a high-level entry point. For the full, deep technical referenc
 
 ## System summary
 
-NeverHuman (GARY) is a **four-process cognitive operating system** for Apple Silicon:
+NeverHuman (GARY) is a **five-part cognitive operating system** for Apple Silicon:
 
-| Process | What it does | Priority |
+| Component | What it does | Priority |
 |---------|-------------|----------|
-| **Reflex Core** | Voice pipeline: VAD → ASR → LLM → TTS | Highest |
+| **UI Layer** | Browser SPA and setup flow handling | High |
+| **Reflex Core** | FastAPI orchestration and state handling | Highest |
+| **Inference Runtime** | Local ASR, TTS, and Qwen LLM execution | Highest |
 | **Memory Spine** | Postgres + pgvector durable storage | High |
-| **Mind Daemon** | Background reflection, affect, initiative | Low |
-| **Learning Lab** | Offline LoRA fine-tuning | Lowest |
+| **Mind Daemon** | Background reflection, consolidation, and event processing | Low |
 
 **Single inviolable rule**: when the user speaks, everything else yields instantly.
 

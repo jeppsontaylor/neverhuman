@@ -1,6 +1,6 @@
 # Contributing to NeverHuman (GARY)
 
-First off, thank you for considering contributing to GARY! This is a community-driven project dedicated to building a private, local, voice-first cognitive assistant for Apple Silicon. We’d love your help.
+Thank you for considering contributing to NeverHuman. We are building a high-performance, private, and local interactive cognitive assistant optimized for Apple Silicon. Contributions from engineers who enjoy turning ambitious local architecture into precise, reliable software are highly valued.
 
 ## Contribution Lanes
 
