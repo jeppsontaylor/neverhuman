@@ -12,36 +12,54 @@ Persistent memory, local inference, and real-time voice interaction — fully on
   <a href="https://support.apple.com/en-us/HT211814">
     <img src="https://img.shields.io/badge/platform-Apple%20Silicon-black?logo=apple" alt="Apple Silicon" />
   </a>
+  <a href="docs/benchmarks.md">
+    <img src="https://img.shields.io/badge/status-Alpha%20%2F%20Developer%20Preview-orange.svg" alt="Project Status" />
+  </a>
 </p>
 
 <p align="center">
-  <a href="#quick-start">Get Started</a> · 
-  <a href="#demo">Demo</a> · 
-  <a href="docs/benchmarks.md">Benchmarks</a> · 
-  <a href="ARCHITECTURE.md">Architecture</a> · 
+  <a href="#quick-start">Get Started</a> ·
+  <a href="#demo">Demo</a> ·
+  <a href="#architecture-overview">Architecture</a> ·
+  <a href="docs/benchmarks.md">Benchmarks</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
 ---
 
+## At a glance
+
+| | |
+|---|---|
+| **Runs on** | Apple Silicon Macs |
+| **Core experience** | Local voice conversation, memory, retrieval, reflection |
+| **Privacy model** | Fully on-device, no required cloud dependency |
+| **Designed for** | Long-lived interaction, personalization, and local ownership |
+| **Status** | Alpha / Developer Preview |
+
+---
+
 ## What makes it different
 
-* ![Private by default](https://img.shields.io/badge/Private_by_default-58a6ff?style=flat-square) — runs entirely on your Mac; your data stays on your machine.
-* ![Built for Apple Silicon](https://img.shields.io/badge/Built_for_Apple_Silicon-ff7b72?style=flat-square) — optimized for efficient local inference with SSD-to-Metal streaming.
-* ![Persistent memory](https://img.shields.io/badge/Persistent_memory-d2a8ff?style=flat-square) — stores and retrieves relevant context over time.
-* ![Designed to adapt](https://img.shields.io/badge/Designed_to_adapt-3fb950?style=flat-square) — built for long-lived interaction, reflection, and personalization.
+- **Private by default** — runs entirely on your Mac; your data stays on your machine.
+- **Built for Apple Silicon** — optimized for efficient local inference with SSD-to-Metal streaming.
+- **Persistent memory** — stores and retrieves relevant context over time.
+- **Designed to adapt** — built for long-lived interaction, reflection, and personalization.
 
 ---
 
 ## Demo
 
-*The assets below are placeholders. Replace them with product screenshots and real demo media as soon as they are available.*
+> **See GARY running locally on Apple Silicon.**  
+> The assets below are placeholders until final product media is available.
 
 ![Hero Demo GIF](assets/hero-demo-placeholder.gif)
 *GARY running locally with real-time voice interaction.*
 
 <details>
 <summary><b>View interface screenshots</b></summary>
+
+<br>
 
 ![Conversation UI](assets/chat-ui-placeholder.png)
 *Natural voice interaction with low-latency turn-taking.*
@@ -55,11 +73,11 @@ Persistent memory, local inference, and real-time voice interaction — fully on
 
 ## Who this is for
 
-* Mac users who want a private, on-device AI assistant.
-* Engineers building long-lived local voice agents.
-* Researchers exploring memory, reflection, and adaptation in interactive systems.
-* Open-source contributors interested in local inference, retrieval, and agent architecture.
-* People who want ownership, inspectability, and zero subscription dependency.
+- Mac users who want a private, on-device AI assistant.
+- Engineers building long-lived local voice agents.
+- Researchers exploring memory, reflection, and adaptation in interactive systems.
+- Open-source contributors interested in local inference, retrieval, and agent architecture.
+- People who want ownership, inspectability, and zero subscription dependency.
 
 ---
 
@@ -87,15 +105,13 @@ See the [Local Development Guide](docs/getting-started.md) for:
 * frontend binding on `localhost:8000`
 * development workflow and debugging tips
 
-### Hardware requirements
+### Hardware compatibility
 
-| Requirement     | Value         |
-| --------------- | ------------- |
-| OS              | macOS 13+     |
-| Chip            | Apple Silicon |
-| Minimum RAM     | 16GB          |
-| Recommended RAM | 32GB+         |
-| Storage         | ~50GB SSD     |
+| Hardware Tier | Status | Recommended Experience |
+|---|---|---|
+| **M1 / M2 / M3 (Base, 16GB)** | Supported | Basic (Voice + Reflection) |
+| **M2 Pro / M3 Pro (32GB)** | Supported | Strong (Rapid Turn-taking) |
+| **M3 Max / M4 Max (64GB+)** | Supported | Excellent (Maximum Parameter Models) |
 
 ---
 
@@ -103,12 +119,28 @@ See the [Local Development Guide](docs/getting-started.md) for:
 
 GARY is a voice-first local cognitive assistant built around persistent memory and long-lived interaction. Rather than behaving like a stateless chat window, GARY is designed to:
 
-* 🎧 **listen** through a low-latency voice activity and speech pipeline
-* 🗣️ **speak** with fast local text-to-speech
-* 🧠 **remember** through durable local memory and vector retrieval
-* 🔎 **retrieve** context from structured Postgres-backed storage
-* 💭 **reflect** in the background while idle
-* 🌱 **adapt** by consolidating patterns from repeated interaction
+* **Listen** through a low-latency voice activity and speech pipeline
+* **Speak** with fast local text-to-speech
+* **Remember** through durable local memory and vector retrieval
+* **Retrieve** context from structured Postgres-backed storage
+* **Reflect** in the background while idle
+* **Adapt** by consolidating patterns from repeated interaction
+
+### GARY vs. Cloud Assistants
+
+| Feature | GARY | Typical Cloud Assistant |
+|---|---|---|
+| **Execution** | Entirely local (Apple Silicon) | Remote servers |
+| **Memory** | Persistent, accessible vector DB | Ephemeral or opaque |
+| **Privacy** | 100% on-device | Data processed centrally |
+| **Ownership** | Fully inspectable Postgres tables | Proprietary black box |
+| **Cost** | Zero recurring subscriptions | Monthly fees |
+
+---
+
+## Why local matters
+
+Running GARY on your own Mac means lower latency, durable personalization, predictable cost, and full control over memory and runtime behavior. The goal is not just to replicate a cloud assistant locally, but to make a more personal and inspectable one possible.
 
 ---
 
@@ -118,7 +150,7 @@ GARY is a voice-first local cognitive assistant built around persistent memory a
 
 The core loop is functional today, but APIs, UX, and runtime behavior are still evolving.
 
-### ✅ What works today
+### What works today
 
 * Real-time voice input and output
 * On-device inference and local memory vectorization
@@ -126,7 +158,7 @@ The core loop is functional today, but APIs, UX, and runtime behavior are still 
 * Background reflection and daemon tasks
 * Model selection during setup
 
-### 🚧 On the roadmap
+### On the roadmap
 
 * Deeper long-term adaptation and personalization
 * Richer personality shaping via the Humanity Slider
@@ -149,7 +181,7 @@ For implementation details, see the [Inference Runtime Guide](docs/inference-run
 
 ![Architecture System Diagram](assets/architecture-placeholder.svg)
 
-**Core architecture**
+### Core architecture
 
 1. **UI layer** — browser-based interface and setup flow
 2. **Reflex core** — FastAPI orchestration and state handling
@@ -163,31 +195,31 @@ For implementation details, see the [Inference Runtime Guide](docs/inference-run
 
 ## Features
 
-### 💬 Interaction
+### Interaction
 
 * Real-time conversational pipeline
 * Natural local text-to-speech
 * Low-latency turn-taking and context retention
 
-### 💾 Memory
+### Memory
 
 * Searchable persistent memory
 * Semantic retrieval
 * Structured relationship storage
 
-### ⚡ Runtime
+### Runtime
 
 * Fully on-device model execution
 * Apple Silicon-optimized runtime
 * High-speed SSD-to-Metal streaming
 
-### 🧬 Personalization
+### Personalization
 
 * Memory growth over time
 * Adaptation from repeated interaction
 * Configurable personality boundaries
 
-### 🔒 Privacy
+### Privacy
 
 * No required cloud dependency
 * Local-only data processing
@@ -224,7 +256,7 @@ See [Benchmarks.md](docs/benchmarks.md) for full methodology, hardware details, 
 
 We’re building a private, local, voice-first cognitive assistant for Apple Silicon. If you care about local AI, memory systems, voice UX, inference performance, or making computing feel more personal, we’d love your help.
 
-We maintain clear contributor lanes:
+### Contributor lanes
 
 * `voice` — ASR, TTS, VAD, and realtime interaction
 * `memory` — retrieval, storage, and consolidation systems
