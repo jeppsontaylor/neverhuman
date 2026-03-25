@@ -37,10 +37,10 @@ class TestPhaseSelection:
     """
 
     def test_returns_none_when_too_early(self):
-        """No thoughts when idle < MIN_IDLE_FOR_THOUGHT (30s)."""
+        """No thoughts when idle < MIN_IDLE_FOR_THOUGHT (15s)."""
         assert select_phase(0) is None
         assert select_phase(2.0) is None
-        assert select_phase(29.0) is None
+        assert select_phase(14.0) is None
 
     def test_reflecting_after_min_idle_until_120s_effective(self):
         """Reflecting once idle ≥ MIN_IDLE_FOR_THOUGHT and effective_idle < 120."""

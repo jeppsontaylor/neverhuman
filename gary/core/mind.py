@@ -73,8 +73,8 @@ PHASE_LABELS = {
     PHASE_DREAMING:      "🌙 Dreaming",
 }
 
-# Minimum idle seconds before internal thoughts begin (Architecture Bible: 30s)
-MIN_IDLE_FOR_THOUGHT = 30.0
+# Minimum idle seconds before internal thoughts begin
+MIN_IDLE_FOR_THOUGHT = 15.0
 
 # Max consecutive repetitive thoughts before pausing
 MAX_STALE_STREAK = 2

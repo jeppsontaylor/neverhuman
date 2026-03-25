@@ -210,9 +210,9 @@ class TurnSupervisor:
     """Per-session turn arbitrator.  Owns floor, engagement, mode, leases, and cancellation."""
 
     # ── Timing constants (seconds) ────────────────────────────────────────────
-    COOLDOWN_SECONDS         = 15.0   # post-turn warmth before engaged_silence
+    COOLDOWN_SECONDS         = 8.0    # post-turn warmth before engaged_silence
     ENGAGED_SILENCE_SECONDS  = 60.0   # silence before truly_idle
-    MIN_IDLE_FOR_THOUGHT     = 10.0   # min seconds in IDLE before mind may pulse
+    MIN_IDLE_FOR_THOUGHT     = 5.0    # min seconds in ENGAGED/IDLE before mind may pulse
     ORPHAN_TIMEOUT_SECONDS   = 60.0   # force-clear pending turn after this
     IS_SPEAKING_TIMEOUT      = 30.0   # hard cap on speaking duration
     SAFE_MODE_THRESHOLD      = 3      # floor violations before safe_mode
