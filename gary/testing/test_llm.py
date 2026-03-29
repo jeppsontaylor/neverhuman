@@ -13,10 +13,18 @@ import json
 import pytest
 import sys
 import os
+from typing import Any
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from pipeline.llm import _split_sentences, SYSTEM_PROMPT, MAX_TOKENS, TEMPERATURE, LLM_URL
+from pipeline.llm import (
+    _build_payload,
+    _split_sentences,
+    SYSTEM_PROMPT,
+    MAX_TOKENS,
+    TEMPERATURE,
+    LLM_URL,
+)
 
 
 # ── Sentence Splitter ─────────────────────────────────────────────────────────
@@ -249,18 +257,83 @@ class TestLLMConstants:
     def test_temperature_in_range(self):
         assert 0.0 <= TEMPERATURE <= 2.0
 
+    def test_payload_builder_respects_runtime_budget(self):
+        payload = _build_payload(
+            [{"role": "user", "content": "hello"}],
+            max_tokens=123,
+            temperature=0.61,
+        )
+        assert payload["max_tokens"] == 123
+        assert payload["temperature"] == 0.61
+        assert payload["messages"][0]["role"] == "system"
+        assert payload["messages"][1]["content"] == "hello"
+
 
 # ── check_connectivity ───────────────────────────────────────────────────────
 
 class TestCheckConnectivity:
-    @pytest.mark.asyncio
-    async def test_connectivity_returns_bool(self):
+    def test_connectivity_returns_bool(self):
         """Without a running LLM server, should return False gracefully."""
         from pipeline.llm import check_connectivity
-        result = await check_connectivity()
+        result = asyncio.run(check_connectivity())
         assert isinstance(result, bool)
         # Server is likely not running during tests
         assert result is False
+
+
+class TestRuntimeBudgetPlumbing:
+    def test_stream_uses_runtime_max_tokens_and_temperature(self, monkeypatch):
+        captured: dict[str, Any] = {}
+
+        class FakeResp:
+            status_code = 200
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def aread(self):
+                return b""
+
+            async def aiter_lines(self):
+                yield "data: [DONE]"
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def stream(self, method, url, json=None):
+                captured["method"] = method
+                captured["url"] = url
+                captured["json"] = json
+                return FakeResp()
+
+        import pipeline.llm as llm_mod
+        monkeypatch.setattr(llm_mod.httpx, "AsyncClient", FakeClient)
+
+        async def _run():
+            events = []
+            async for event in llm_mod.stream(
+                [{"role": "user", "content": "hi"}],
+                max_tokens=222,
+                temperature=0.66,
+            ):
+                events.append(event)
+            return events
+
+        events = asyncio.run(_run())
+        assert captured["method"] == "POST"
+        assert captured["json"]["max_tokens"] == 222
+        assert captured["json"]["temperature"] == 0.66
+        assert any(e["type"] == "done" for e in events)
 
 
 if __name__ == "__main__":

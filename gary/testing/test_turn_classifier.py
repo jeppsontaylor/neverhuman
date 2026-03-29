@@ -5,6 +5,8 @@ Validates SNAP/LAYERED/DEEP classification and ensures <1ms per call.
 """
 from __future__ import annotations
 
+import os
+import stat
 import time
 
 from pipeline.turn_classifier import (
@@ -229,3 +231,38 @@ class TestV2Performance:
             elapsed_us = (time.perf_counter_ns() - start) / 1000
             assert elapsed_us < 1000, f"Too slow: {elapsed_us:.0f}µs for {text[:40]!r}"
 
+
+class TestRustBinaryPath:
+    def test_classify_turn_uses_rust_binary_when_available(self, tmp_path, monkeypatch):
+        script = tmp_path / "turn_classifier_bin"
+        script.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json,sys\n"
+            "inp=json.loads(sys.stdin.read())\n"
+            "print(json.dumps('deep'))\n",
+            encoding="utf-8",
+        )
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        monkeypatch.setenv("GARY_TURN_CLASSIFIER_BIN", os.fspath(script))
+
+        assert classify_turn("hello") == TurnMode.DEEP
+
+    def test_classify_turn_v2_uses_rust_binary_when_available(self, tmp_path, monkeypatch):
+        script = tmp_path / "turn_classifier_bin_v2"
+        script.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json,sys\n"
+            "inp=json.loads(sys.stdin.read())\n"
+            "if inp.get('command') == 'v2':\n"
+            "    print(json.dumps({'depth_mode':'snap','intent_class':'repair','reasoning_mode':'deliberate_burst'}))\n"
+            "else:\n"
+            "    print(json.dumps('snap'))\n",
+            encoding="utf-8",
+        )
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        monkeypatch.setenv("GARY_TURN_CLASSIFIER_BIN", os.fspath(script))
+
+        result = classify_turn_v2("hello")
+        assert result.depth_mode == TurnMode.SNAP
+        assert result.intent_class == IntentClass.REPAIR
+        assert result.reasoning_mode == ReasoningMode.DELIBERATE_BURST

@@ -181,6 +181,58 @@ For implementation details, see the [Inference Runtime Guide](docs/inference-run
 
 ![Architecture System Diagram](assets/architecture-placeholder.svg)
 
+```mermaid
+flowchart LR
+  subgraph Client["Client (Browser)"]
+    UI["index.html UI"]
+    AW["processor.js AudioWorklet\n16kHz mic chunks"]
+    UI <--> AW
+  end
+
+  subgraph Reflex["Reflex Core (gary/server.py)"]
+    WS["WebSocket /ws/gary"]
+    VAD["VAD + turn segmentation"]
+    ASR["ASR (Qwen3-ASR / MLX)"]
+    TURN["Turn classifier\nSNAP/LAYERED/DEEP"]
+    CPK["Context Pack v2"]
+    LLM["LLM client (SSE)"]
+    TTS["TTS (Kokoro ONNX)\n+ parallel queue"]
+    LOG["Session + persistent logs"]
+    WS --> VAD --> ASR --> TURN --> CPK --> LLM --> TTS --> WS
+    Reflex --> LOG
+  end
+
+  subgraph Runtime["Inference Runtime"]
+    MOE["flash-moe\nQwen3.5-35B MoE"]
+  end
+
+  subgraph Memory["Memory Spine"]
+    SPOOL["Spool (crash-safe JSONL)"]
+    DB["asyncpg pool"]
+    PG[("Postgres + pgvector")]
+    RET["Fusion retrieval"]
+    SPOOL --> DB --> PG
+    RET --> DB
+  end
+
+  subgraph Mind["Mind Daemon"]
+    MINDLOOP["Mind loop + pulse scoring"]
+    MINDAPI["apps/mindd sidecar (:7863)"]
+    LANES["9 cognitive lane prompts"]
+    MINDLOOP --> MINDAPI --> LANES
+  end
+
+  AW --> WS
+  LLM -- "SSE" --> MOE
+  CPK --> RET
+  MINDLOOP --> DB
+  MINDLOOP --> WS
+  WS --> UI
+```
+
+For an expanded, subsystem-by-subsystem diagram and role map, see [`docs/system-network-diagram.md`](docs/system-network-diagram.md).  
+For the deep architecture upgrade proposal focused on “most human” behavior and autonomous learning, see [`docs/design/humanity-level-up-plan.md`](docs/design/humanity-level-up-plan.md).
+
 ### Core architecture
 
 1. **UI layer** — browser-based interface and setup flow
