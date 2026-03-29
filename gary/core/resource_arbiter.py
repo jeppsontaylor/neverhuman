@@ -11,6 +11,9 @@ Controls background resource usage to prevent latency degradation:
 from __future__ import annotations
 
 import logging
+import json
+import os
+import subprocess
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -91,16 +94,72 @@ class ResourceArbiter:
         self._claims: dict[str, ResourceClaim] = {}
         self.ttft_metrics = TTFTMetrics()
         self._circuit_broken = False
+        self._arbiter_bin = os.getenv("GARY_RESOURCE_ARBITER_BIN", "")
+        self._rust_state: dict | None = None
+
+    def _apply_rust(self, operation: dict) -> dict | None:
+        if not self._arbiter_bin:
+            return None
+        payload = {"operation": operation}
+        if self._rust_state is not None:
+            payload["state"] = self._rust_state
+        try:
+            res = subprocess.run(
+                [self._arbiter_bin],
+                input=json.dumps(payload),
+                text=True,
+                capture_output=True,
+                check=True,
+                timeout=0.35,
+            )
+            out = json.loads(res.stdout)
+            self._rust_state = out.get("state")
+            return out
+        except Exception:
+            return None
+
+    def _hydrate_from_rust_state(self) -> None:
+        if not self._rust_state:
+            return
+        self._circuit_broken = bool(self._rust_state.get("circuit_broken", False))
+        self.ttft_metrics.samples = list(self._rust_state.get("ttft_samples", []))
+        self.ttft_metrics.max_samples = int(self._rust_state.get("max_samples", 50))
+        self.ttft_metrics.threshold_ms = float(self._rust_state.get("threshold_ms", 2000.0))
+        claims: dict[str, ResourceClaim] = {}
+        for task_id, obj in self._rust_state.get("claims", {}).items():
+            claims[task_id] = ResourceClaim(
+                kind=ResourceKind(obj["kind"]),
+                priority=ResourcePriority[obj["priority"].upper()],
+                task_id=task_id,
+                paused=bool(obj.get("paused", False)),
+            )
+        self._claims = claims
 
     @property
     def circuit_broken(self) -> bool:
         """True if TTFT p95 has degraded — all background work paused."""
+        if self._arbiter_bin:
+            out = self._apply_rust({"op": "status"})
+            if out is not None:
+                self._hydrate_from_rust_state()
         return self._circuit_broken
 
     def register_claim(
         self, kind: ResourceKind, task_id: str, priority: ResourcePriority,
     ) -> ResourceClaim:
         """Register a resource claim for a background task."""
+        out = self._apply_rust(
+            {
+                "op": "register_claim",
+                "kind": kind.value,
+                "task_id": task_id,
+                "priority": priority.name.lower(),
+            }
+        )
+        if out is not None:
+            self._hydrate_from_rust_state()
+            return self._claims[task_id]
+
         claim = ResourceClaim(kind=kind, priority=priority, task_id=task_id)
         self._claims[task_id] = claim
 
@@ -112,6 +171,10 @@ class ResourceArbiter:
 
     def release_claim(self, task_id: str) -> None:
         """Release a resource claim when task completes."""
+        out = self._apply_rust({"op": "release_claim", "task_id": task_id})
+        if out is not None:
+            self._hydrate_from_rust_state()
+            return
         self._claims.pop(task_id, None)
 
     def on_user_active(self) -> list[str]:
@@ -119,6 +182,11 @@ class ResourceArbiter:
 
         Returns list of paused task IDs.
         """
+        out = self._apply_rust({"op": "on_user_active"})
+        if out is not None:
+            self._hydrate_from_rust_state()
+            return list(out.get("paused_task_ids", []))
+
         paused = []
         for task_id, claim in self._claims.items():
             if claim.priority.value > ResourcePriority.HIGH.value and not claim.paused:
@@ -131,6 +199,11 @@ class ResourceArbiter:
 
         Returns list of resumed task IDs.
         """
+        out = self._apply_rust({"op": "on_user_idle"})
+        if out is not None:
+            self._hydrate_from_rust_state()
+            return list(out.get("resumed_task_ids", []))
+
         if self._circuit_broken:
             return []  # don't resume while circuit is broken
 
@@ -146,6 +219,11 @@ class ResourceArbiter:
 
         Returns list of paused task IDs.
         """
+        out = self._apply_rust({"op": "on_onset"})
+        if out is not None:
+            self._hydrate_from_rust_state()
+            return list(out.get("paused_task_ids", []))
+
         paused = []
         for task_id, claim in self._claims.items():
             if claim.kind != ResourceKind.REFLEX and not claim.paused:
@@ -155,6 +233,11 @@ class ResourceArbiter:
 
     def record_ttft(self, ttft_ms: float) -> None:
         """Record a time-to-first-token measurement."""
+        out = self._apply_rust({"op": "record_ttft", "ttft_ms": ttft_ms})
+        if out is not None:
+            self._hydrate_from_rust_state()
+            return
+
         self.ttft_metrics.record(ttft_ms)
         was_broken = self._circuit_broken
         self._circuit_broken = self.ttft_metrics.is_degraded
@@ -174,11 +257,24 @@ class ResourceArbiter:
 
     def should_allow(self, kind: ResourceKind) -> bool:
         """Quick check: should this kind of work be allowed right now?"""
+        out = self._apply_rust({"op": "should_allow", "kind": kind.value})
+        if out is not None:
+            self._hydrate_from_rust_state()
+            allow = out.get("allow")
+            return bool(allow) if allow is not None else True
+
         if self._circuit_broken and kind != ResourceKind.REFLEX:
             return False
         return True
 
     def status(self) -> dict:
+        out = self._apply_rust({"op": "status"})
+        if out is not None:
+            self._hydrate_from_rust_state()
+            status = out.get("status")
+            if isinstance(status, dict):
+                return status
+
         return {
             "circuit_broken": self._circuit_broken,
             "ttft_p95_ms": round(self.ttft_metrics.p95, 1),

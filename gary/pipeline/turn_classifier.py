@@ -16,7 +16,10 @@ Used by server.py after ASR to decide:
 """
 from __future__ import annotations
 
+import json
+import os
 import re
+import subprocess
 from dataclasses import dataclass
 from enum import Enum
 
@@ -250,6 +253,22 @@ def classify_turn(transcript: str) -> TurnMode:
     if not transcript or not transcript.strip():
         return TurnMode.SNAP
 
+    rust_bin = os.getenv("GARY_TURN_CLASSIFIER_BIN", "")
+    if rust_bin:
+        try:
+            payload = json.dumps({"text": transcript})
+            res = subprocess.run(
+                [rust_bin],
+                input=payload,
+                text=True,
+                capture_output=True,
+                check=True,
+                timeout=0.2,
+            )
+            return TurnMode(json.loads(res.stdout))
+        except Exception:
+            pass
+
     text = transcript.strip()
     lower = text.lower().rstrip(".!?,;: ")
     words = text.split()
@@ -267,6 +286,27 @@ def classify_turn_v2(transcript: str) -> TurnClassification:
             intent_class=IntentClass.COMMAND,
             reasoning_mode=ReasoningMode.REFLEX_ONLY,
         )
+
+    rust_bin = os.getenv("GARY_TURN_CLASSIFIER_BIN", "")
+    if rust_bin:
+        try:
+            payload = json.dumps({"command": "v2", "text": transcript})
+            res = subprocess.run(
+                [rust_bin],
+                input=payload,
+                text=True,
+                capture_output=True,
+                check=True,
+                timeout=0.2,
+            )
+            obj = json.loads(res.stdout)
+            return TurnClassification(
+                depth_mode=TurnMode(obj["depth_mode"]),
+                intent_class=IntentClass(obj["intent_class"]),
+                reasoning_mode=ReasoningMode(obj["reasoning_mode"]),
+            )
+        except Exception:
+            pass
 
     text = transcript.strip()
     lower = text.lower().rstrip(".!?,;: ")

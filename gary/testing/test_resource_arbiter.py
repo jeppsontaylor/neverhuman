@@ -1,6 +1,9 @@
 """
 testing/test_resource_arbiter.py — Tests for resource arbitration
 """
+import os
+import stat
+
 from core.resource_arbiter import (
     ResourceArbiter, ResourceKind, ResourcePriority,
 )
@@ -99,3 +102,30 @@ class TestCircuitBreaker:
         assert "circuit_broken" in status
         assert "ttft_p95_ms" in status
         assert status["active_claims"] == 1
+
+
+class TestRustBinaryPath:
+    def test_status_uses_rust_binary_when_available(self, tmp_path, monkeypatch):
+        script = tmp_path / "resource_arbiter_bin"
+        script.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json,sys\n"
+            "inp=json.loads(sys.stdin.read())\n"
+            "op=inp.get('operation',{}).get('op')\n"
+            "if op=='status':\n"
+            "  out={'state':{'claims':{},'ttft_samples':[321.0],'max_samples':50,'threshold_ms':2000.0,'circuit_broken':True},"
+            "       'status':{'circuit_broken':True,'ttft_p95_ms':321.0,'active_claims':0,'paused_claims':0,'claims':{}}}\n"
+            "elif op=='should_allow':\n"
+            "  out={'state':inp.get('state',{'claims':{},'ttft_samples':[],'max_samples':50,'threshold_ms':2000.0,'circuit_broken':True}),'allow':False}\n"
+            "else:\n"
+            "  out={'state':inp.get('state',{'claims':{},'ttft_samples':[],'max_samples':50,'threshold_ms':2000.0,'circuit_broken':False})}\n"
+            "print(json.dumps(out))\n",
+            encoding="utf-8",
+        )
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        monkeypatch.setenv("GARY_RESOURCE_ARBITER_BIN", os.fspath(script))
+
+        arb = ResourceArbiter()
+        status = arb.status()
+        assert status["circuit_broken"] is True
+        assert arb.should_allow(ResourceKind.MIND) is False

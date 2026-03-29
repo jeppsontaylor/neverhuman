@@ -54,6 +54,17 @@ def _load_system_prompt() -> str:
 SYSTEM_PROMPT = _load_system_prompt()
 
 
+def _build_payload(messages: list[dict], *, max_tokens: int, temperature: float) -> dict:
+    """Construct streaming chat payload."""
+    return {
+        "model": "default",
+        "messages": [{"role": "system", "content": SYSTEM_PROMPT}] + messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": True,
+    }
+
+
 
 def _split_sentences(buffer: str) -> tuple[list[str], str]:
     """
@@ -75,6 +86,9 @@ def _split_sentences(buffer: str) -> tuple[list[str], str]:
 async def stream(
     messages: list[dict],
     interrupt: asyncio.Event | None = None,
+    *,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
 ) -> AsyncIterator[dict]:
     """
     Async generator streaming events from the LLM.
@@ -84,13 +98,9 @@ async def stream(
       {"type": "done"}                      — generation complete
       {"type": "error",   "message": "..."}
     """
-    payload = {
-        "model":       "default",
-        "messages":    [{"role": "system", "content": SYSTEM_PROMPT}] + messages,
-        "max_tokens":  MAX_TOKENS,
-        "temperature": TEMPERATURE,
-        "stream":      True,
-    }
+    max_tokens = MAX_TOKENS if max_tokens is None else max_tokens
+    temperature = TEMPERATURE if temperature is None else temperature
+    payload = _build_payload(messages, max_tokens=max_tokens, temperature=temperature)
 
     buffer = ""
     in_think = False      # True while inside <think>...</think>

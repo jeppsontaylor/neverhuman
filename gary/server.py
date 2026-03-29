@@ -44,7 +44,8 @@ from pipeline.context_pack import compile_reflex_context, pack_history_limit
 from pipeline.llm import stream as llm_stream, check_connectivity
 from pipeline.vad import VADAccumulator, RollingBuffer, SpeechDetector, BARGEIN_PROB, BARGEIN_FRAMES
 from pipeline.filler_audio import get_filler_wav_bytes
-from pipeline.turn_classifier import TurnMode, classify_turn
+from pipeline.turn_classifier import TurnMode
+from pipeline.turn_policy import build_turn_policy, contract_to_dict
 from pipeline.turn_supervisor import TurnSupervisor, FloorState, FloorOwner, Engagement, Event
 from pipeline.tts_normalizer import normalize_for_tts
 from pipeline.output_sanitizer import sanitize_token, sanitize_sentence
@@ -579,6 +580,7 @@ async def ws_gary(websocket: WebSocket):
     async def handle_utterance(audio_np: Optional[np.ndarray] = None, text_override: Optional[str] = None, user_text: Optional[str] = None):
         """Full pipeline: ASR (or text bypass or text input) → LLM stream → TTS → audio."""
         nonlocal history, current_task, is_speaking, last_activity, turn_epoch, current_turn_mode
+        turn_policy = build_turn_policy("")
         last_activity = time.monotonic()
         supervisor._touch_human_activity()
         mind_interrupt.set()  # signal mind daemon to yield
@@ -600,6 +602,7 @@ async def ws_gary(websocket: WebSocket):
 
         if text_override:
             text = text_override
+            turn_policy = build_turn_policy(text)
             log.info(f"[gary] system initiative: {text!r}")
             await _pipeline_log(websocket, "sys", f"Taking initiative: {text}")
             _log_append("conversation", f"GARY (initiative): {text}")
@@ -624,14 +627,24 @@ async def ws_gary(websocket: WebSocket):
             slog.log("text_input", "user", {"text": text}, turn=turn_epoch)
             slog.log_condensed("user", "typed", text, {}, turn=turn_epoch)
 
-            # v4: Classify turn complexity
-            current_turn_mode = classify_turn(text)
+            # v4/v5: classify turn + tempo contract
+            turn_policy = build_turn_policy(text)
+            current_turn_mode = turn_policy.turn_mode
+
             await _pipeline_log(websocket, "sys", f"Turn mode: {current_turn_mode.value}")
             await _safe_send_json(websocket, {"type": "turn_mode", "mode": current_turn_mode.value})
-            slog.log("turn_mode", "sys", {"mode": current_turn_mode.value}, turn=turn_epoch)
+            await _safe_send_json(websocket, {
+                "type": "turn_contract",
+                "contract": contract_to_dict(turn_policy.tempo_contract),
+            })
+            slog.log("turn_mode", "sys", {
+                "mode": current_turn_mode.value,
+                "tempo_mode": turn_policy.tempo_contract.mode,
+                "tempo_route": turn_policy.tempo_contract.model_route,
+            }, turn=turn_epoch)
 
             # Pre-baked WAV only for non-snap turns
-            if current_turn_mode != TurnMode.SNAP:
+            if turn_policy.should_play_filler:
                 filler = get_filler_wav_bytes(STATIC_DIR)
                 if filler and not interrupt_event.is_set():
                     await _safe_send_json(websocket, {"type": "audio_start", "epoch": turn_epoch})
@@ -678,8 +691,9 @@ async def ws_gary(websocket: WebSocket):
                 "audio_duration_sec": round(dur, 2),
             }, turn=turn_epoch)
 
-            # v4: Classify turn complexity
-            current_turn_mode = classify_turn(text)
+            # v4/v5: classify turn + tempo contract
+            turn_policy = build_turn_policy(text)
+            current_turn_mode = turn_policy.turn_mode
             await _pipeline_log(
                 websocket, "sys",
                 f"Turn mode: {current_turn_mode.value}",
@@ -688,10 +702,18 @@ async def ws_gary(websocket: WebSocket):
                 "type": "turn_mode",
                 "mode": current_turn_mode.value,
             })
-            slog.log("turn_mode", "sys", {"mode": current_turn_mode.value}, turn=turn_epoch)
+            await _safe_send_json(websocket, {
+                "type": "turn_contract",
+                "contract": contract_to_dict(turn_policy.tempo_contract),
+            })
+            slog.log("turn_mode", "sys", {
+                "mode": current_turn_mode.value,
+                "tempo_mode": turn_policy.tempo_contract.mode,
+                "tempo_route": turn_policy.tempo_contract.model_route,
+            }, turn=turn_epoch)
 
             # Pre-baked WAV only for non-snap turns (snap should be fast enough)
-            if current_turn_mode != TurnMode.SNAP:
+            if turn_policy.should_play_filler:
                 filler = get_filler_wav_bytes(STATIC_DIR)
                 if filler and not interrupt_event.is_set():
                     await _safe_send_json(websocket, {"type": "audio_start", "epoch": turn_epoch})
@@ -760,7 +782,17 @@ async def ws_gary(websocket: WebSocket):
                 # handle_utterance's clear (L356) and now, don't let it kill
                 # this fresh generation.
                 interrupt_event.clear()
-                async for event in llm_stream(staged_history, interrupt=interrupt_event):
+                slog.log("llm_tempo_budget", "llm", {
+                    "tempo_mode": turn_policy.tempo_contract.mode,
+                    "max_tokens": turn_policy.llm_max_tokens,
+                    "temperature": turn_policy.llm_temperature,
+                }, turn=turn_epoch)
+                async for event in llm_stream(
+                    staged_history,
+                    interrupt=interrupt_event,
+                    max_tokens=turn_policy.llm_max_tokens,
+                    temperature=turn_policy.llm_temperature,
+                ):
                     if interrupt_event.is_set():
                         break
 
