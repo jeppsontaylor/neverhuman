@@ -16,6 +16,9 @@ Tracks the key metrics from Phase 8B:
 from __future__ import annotations
 
 import logging
+import json
+import os
+import subprocess
 import time
 from dataclasses import dataclass, field
 
@@ -67,11 +70,59 @@ class EvalMetrics:
         self.rollback_results = MetricCounter()
         self.kept_change_count: int = 0
         self._started_at: float = time.monotonic()
+        self._eval_bin = os.getenv("GARY_EVAL_METRICS_BIN", "")
+        self._rust_state: dict | None = None
+
+    def _apply_rust(self, operation: dict) -> dict | None:
+        if not self._eval_bin:
+            return None
+        payload = {"operation": operation}
+        if self._rust_state is not None:
+            payload["state"] = self._rust_state
+        try:
+            res = subprocess.run(
+                [self._eval_bin],
+                input=json.dumps(payload),
+                text=True,
+                capture_output=True,
+                check=True,
+                timeout=0.35,
+            )
+            out = json.loads(res.stdout)
+            self._rust_state = out.get("state")
+            return out
+        except Exception:
+            return None
+
+    def _load_counter(self, key: str) -> MetricCounter:
+        if not self._rust_state:
+            return MetricCounter()
+        obj = self._rust_state.get(key, {})
+        return MetricCounter(successes=int(obj.get("successes", 0)), failures=int(obj.get("failures", 0)))
+
+    def _hydrate_from_rust_state(self) -> None:
+        if not self._rust_state:
+            return
+        self.floor_violations = self._load_counter("floor_violations")
+        self.initiative_during_debt = self._load_counter("initiative_during_debt")
+        self.orphaned_turns = self._load_counter("orphaned_turns")
+        self.self_model_accuracy = self._load_counter("self_model_accuracy")
+        self.psychologizing = self._load_counter("psychologizing")
+        self.scratchpad_leaks = self._load_counter("scratchpad_leaks")
+        self.work_product_yield = self._load_counter("work_product_yield")
+        self.self_edit_results = self._load_counter("self_edit_results")
+        self.rollback_results = self._load_counter("rollback_results")
+        self.quest_continuity_scores = list(self._rust_state.get("quest_continuity_scores", []))
+        self.kept_change_count = int(self._rust_state.get("kept_change_count", 0))
 
     # ── Recording methods ────────────────────────────────────────────────────
 
     def record_turn(self, *, floor_violation: bool = False, orphaned: bool = False) -> None:
         """Record turn-level metrics."""
+        out = self._apply_rust({"op": "record_turn", "floor_violation": floor_violation, "orphaned": orphaned})
+        if out is not None:
+            self._hydrate_from_rust_state()
+            return
         if floor_violation:
             self.floor_violations.record_failure()
         else:
@@ -82,6 +133,10 @@ class EvalMetrics:
             self.orphaned_turns.record_success()
 
     def record_initiative_attempt(self, *, during_debt: bool) -> None:
+        out = self._apply_rust({"op": "record_initiative_attempt", "during_debt": during_debt})
+        if out is not None:
+            self._hydrate_from_rust_state()
+            return
         if during_debt:
             self.initiative_during_debt.record_failure()
         else:
@@ -94,6 +149,17 @@ class EvalMetrics:
         scratchpad_leak: bool = False,
         has_work_product: bool = True,
     ) -> None:
+        out = self._apply_rust(
+            {
+                "op": "record_pulse_quality",
+                "psychologizing": psychologizing,
+                "scratchpad_leak": scratchpad_leak,
+                "has_work_product": has_work_product,
+            }
+        )
+        if out is not None:
+            self._hydrate_from_rust_state()
+            return
         if psychologizing:
             self.psychologizing.record_failure()
         else:
@@ -108,27 +174,50 @@ class EvalMetrics:
             self.work_product_yield.record_failure()
 
     def record_quest_continuity(self, score: float) -> None:
+        out = self._apply_rust({"op": "record_quest_continuity", "score": score})
+        if out is not None:
+            self._hydrate_from_rust_state()
+            return
         self.quest_continuity_scores.append(max(0.0, min(1.0, score)))
 
     def record_self_edit(self, *, passed: bool) -> None:
+        out = self._apply_rust({"op": "record_self_edit", "passed": passed})
+        if out is not None:
+            self._hydrate_from_rust_state()
+            return
         if passed:
             self.self_edit_results.record_success()
         else:
             self.self_edit_results.record_failure()
 
     def record_rollback(self, *, success: bool) -> None:
+        out = self._apply_rust({"op": "record_rollback", "success": success})
+        if out is not None:
+            self._hydrate_from_rust_state()
+            return
         if success:
             self.rollback_results.record_success()
         else:
             self.rollback_results.record_failure()
 
     def record_kept_change(self) -> None:
+        out = self._apply_rust({"op": "record_kept_change"})
+        if out is not None:
+            self._hydrate_from_rust_state()
+            return
         self.kept_change_count += 1
 
     # ── Reporting ────────────────────────────────────────────────────────────
 
     def report(self) -> dict:
         """Generate eval metrics report."""
+        out = self._apply_rust({"op": "report"})
+        if out is not None:
+            self._hydrate_from_rust_state()
+            report = dict(out.get("report", {}))
+            report["uptime_sec"] = round(time.monotonic() - self._started_at, 1)
+            return report
+
         avg_continuity = (
             sum(self.quest_continuity_scores) / len(self.quest_continuity_scores)
             if self.quest_continuity_scores else 0.0
@@ -156,6 +245,11 @@ class EvalMetrics:
 
         Returns (healthy, list_of_violations).
         """
+        out = self._apply_rust({"op": "check_health"})
+        if out is not None:
+            self._hydrate_from_rust_state()
+            return bool(out.get("healthy", True)), list(out.get("violations", []))
+
         violations = []
 
         if self.floor_violations.total > 0 and self.floor_violations.failure_rate > 0:

@@ -1,6 +1,9 @@
 """
 testing/test_eval_metrics.py — Tests for eval metrics collector
 """
+import os
+import stat
+
 from core.eval_metrics import EvalMetrics, MetricCounter
 
 
@@ -92,3 +95,37 @@ class TestEvalMetrics:
         ]
         for key in expected_keys:
             assert key in report, f"Missing key: {key}"
+
+
+class TestRustBinaryPath:
+    def test_report_uses_rust_binary_when_available(self, tmp_path, monkeypatch):
+        script = tmp_path / "eval_metrics_bin"
+        script.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json,sys\n"
+            "inp=json.loads(sys.stdin.read())\n"
+            "op=inp.get('operation',{}).get('op')\n"
+            "base={'state':inp.get('state',{'floor_violations':{'successes':0,'failures':0},"
+            "'initiative_during_debt':{'successes':0,'failures':0},'orphaned_turns':{'successes':0,'failures':0},"
+            "'self_model_accuracy':{'successes':0,'failures':0},'psychologizing':{'successes':0,'failures':0},"
+            "'scratchpad_leaks':{'successes':0,'failures':0},'work_product_yield':{'successes':0,'failures':0},"
+            "'quest_continuity_scores':[],'self_edit_results':{'successes':0,'failures':0},"
+            "'rollback_results':{'successes':0,'failures':0},'kept_change_count':0})}\n"
+            "if op=='report':\n"
+            "  base['report']={'floor_violation_rate':12.5,'initiative_during_debt_rate':0.0,'orphaned_turn_rate':0.0,"
+            "'psychologizing_rate':0.0,'scratchpad_leak_rate':0.0,'work_product_yield':100.0,'quest_continuity_avg':0.0,"
+            "'self_edit_pass_rate':100.0,'rollback_success_rate':100.0,'kept_changes_24h':0,'total_turns':8,'total_pulses':0,'total_self_edits':0}\n"
+            "elif op=='check_health':\n"
+            "  base['healthy']=False;base['violations']=['Floor violations: 12.5%']\n"
+            "print(json.dumps(base))\n",
+            encoding="utf-8",
+        )
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        monkeypatch.setenv("GARY_EVAL_METRICS_BIN", os.fspath(script))
+
+        metrics = EvalMetrics()
+        report = metrics.report()
+        assert report["floor_violation_rate"] == 12.5
+        healthy, violations = metrics.check_health()
+        assert healthy is False
+        assert "Floor violations" in violations[0]

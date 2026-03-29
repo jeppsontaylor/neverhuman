@@ -178,3 +178,4 @@ A phase is considered complete only if:
 - ✅ Added tests validating Rust binary path wiring in `testing/test_turn_classifier.py`.
 - ✅ Extended Rust `turn_classifier` to support v2 three-axis classification (depth + intent + reasoning) and wired Python `classify_turn_v2` to the Rust binary first.
 - ✅ Started porting arbitration core: added Rust `resource_arbiter` crate and wired `core/resource_arbiter.py` to use Rust-first execution via `GARY_RESOURCE_ARBITER_BIN`.
+- ✅ Started porting eval metrics core: added Rust `eval_metrics` crate and wired `core/eval_metrics.py` to use Rust-first execution via `GARY_EVAL_METRICS_BIN`.

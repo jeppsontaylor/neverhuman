@@ -27,7 +27,7 @@ Complete inventory of all `*.py` files in this repository and why each still exi
 | `gary/core/drift_audit.py` | Deterministic runtime logic | High-priority Rust candidate; still Python due migration sequencing and parity-test backlog. |
 | `gary/core/drive_types.py` | Deterministic runtime logic | High-priority Rust candidate; still Python due migration sequencing and parity-test backlog. |
 | `gary/core/eval_harness.py` | Deterministic runtime logic | High-priority Rust candidate; still Python due migration sequencing and parity-test backlog. |
-| `gary/core/eval_metrics.py` | Deterministic runtime logic | High-priority Rust candidate; still Python due migration sequencing and parity-test backlog. |
+| `gary/core/eval_metrics.py` | Deterministic runtime logic | Hybrid wrapper; Rust-first metrics state machine path available via `GARY_EVAL_METRICS_BIN` with Python fallback. |
 | `gary/core/events.py` | Deterministic runtime logic | High-priority Rust candidate; still Python due migration sequencing and parity-test backlog. |
 | `gary/core/llm_watchdog.py` | Deterministic runtime logic | High-priority Rust candidate; still Python due migration sequencing and parity-test backlog. |
 | `gary/core/log_writer.py` | Deterministic runtime logic | High-priority Rust candidate; still Python due migration sequencing and parity-test backlog. |
